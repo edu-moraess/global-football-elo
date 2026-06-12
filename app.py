@@ -688,7 +688,7 @@ with tab6:
 
 
 # ---------------------------------------------------------------------------
-# TAB 7 — ESTÁDIOS (MAPA REAL COM FOLIUM + OPENSTREETMAP)
+# TAB 7 — ESTÁDIOS (MAPA REAL COM FOLIUM + OPENSTREETMAP) - CORRIGIDO
 # ---------------------------------------------------------------------------
 with tab7:
     st.subheader("🗺️ Mapa Mundial de Estádios")
@@ -771,17 +771,34 @@ with tab7:
             center_lat = df_plot["Latitude"].mean()
             center_lon = df_plot["Longitude"].mean()
 
+            # Mapa base: OpenStreetMap (ruas)
             m = folium.Map(
                 location=[center_lat, center_lon],
                 zoom_start=2,
-                tiles='OpenStreetMap',   # mapa de ruas gratuito
-                control_scale=True
+                tiles='OpenStreetMap',
+                control_scale=True,
+                attr='OpenStreetMap contributors'  # atribuição explícita
             )
 
-            # Adicionar opção de camadas (ruas / relevo / etc.)
-            folium.TileLayer('cartodbdark_matter', name='Escuro').add_to(m)
-            folium.TileLayer('stamenterrain', name='Terreno').add_to(m)
-            folium.TileLayer('openstreetmap', name='Ruas').add_to(m)
+            # Adicionar camadas extras com atribuição correta
+            folium.TileLayer(
+                tiles='CartoDB dark_matter',
+                name='Escuro',
+                attr='CartoDB'
+            ).add_to(m)
+
+            folium.TileLayer(
+                tiles='Stamen Terrain',
+                name='Terreno',
+                attr='Map tiles by Stamen Design, under CC BY 3.0. Data by OpenStreetMap, under ODbL.'
+            ).add_to(m)
+
+            # Camada 'Ruas' é opcional (já é a base), mas pode ser mantida como cópia
+            folium.TileLayer(
+                tiles='OpenStreetMap',
+                name='Ruas',
+                attr='OpenStreetMap contributors'
+            ).add_to(m)
 
             # Cluster de marcadores para performance
             marker_cluster = MarkerCluster(name="Estádios").add_to(m)
