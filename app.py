@@ -667,13 +667,13 @@ with tab6:
     - Curva de valorização por idade, maiores transferências, fluxo financeiro entre ligas, distribuição de nacionalidades e resumo financeiro dos clubes.
 
     ### 🗺️ **Estádios**
-    - Estádios com coordenadas geográficas obtidos via Wikidata (SPARQL).
-    - Mapa interativo com zoom, busca e filtros.
+    - Coordenadas geográficas via Wikidata (SPARQL) + enriquecimento com capacidade (Football Stadiums.csv).
+    - Mapa interativo com zoom, busca e filtros, incluindo time e capacidade.
 
     ### 📂 **Fontes**
     - Partidas internacionais: [Football Results (1872-2024)](https://www.kaggle.com/datasets/martj42/international-football-results-from-1872-to-2017)
     - Dados de mercado: [Transfermarkt Dataset](https://www.kaggle.com/datasets/davidcariboo/player-scores)
-    - Estádios: Wikidata SPARQL endpoint (dados extraídos em 2024)
+    - Estádios: Wikidata SPARQL endpoint + Kaggle Football Stadiums
     - Processamento e visualização: **Python, Pandas, Plotly, Streamlit**.
 
     ---
@@ -683,7 +683,7 @@ with tab6:
 
 
 # ---------------------------------------------------------------------------
-# TAB 7 — ESTÁDIOS (MAPA INTERATIVO COM ZOOM)
+# TAB 7 — ESTÁDIOS (MAPA INTERATIVO COM CAPACIDADE)
 # ---------------------------------------------------------------------------
 with tab7:
     st.subheader("🗺️ Mapa Mundial de Estádios")
@@ -692,7 +692,6 @@ with tab7:
     @st.cache_data
     def load_stadiums_data():
         path = Path("data/top_1000_stadiums_world.csv")
-
         if not path.exists():
             st.warning("Arquivo 'top_1000_stadiums_world.csv' não encontrado em data/")
             return pd.DataFrame()
@@ -707,12 +706,12 @@ with tab7:
         df["longitude"] = pd.to_numeric(df["longitude"], errors="coerce")
         df = df.dropna(subset=["latitude", "longitude"])
 
-        # Preencher valores vazios para evitar erros no hover
+        # Preencher valores vazios
         df["team"] = df["team"].fillna("Desconhecido")
         df["league"] = df["league"].fillna("Desconhecida")
         df["country"] = df["country"].fillna("Desconhecido")
 
-        # Renomear colunas para padronizar com o restante do app
+        # Renomear colunas
         df = df.rename(columns={
             "stadium": "Stadium",
             "team": "Team",
@@ -721,6 +720,37 @@ with tab7:
             "latitude": "Latitude",
             "longitude": "Longitude"
         })
+
+        # Tentar mesclar capacidade do arquivo Football Stadiums.csv
+        cap_path = Path("data/Football Stadiums.csv")
+        if cap_path.exists():
+            try:
+                cap_df = pd.read_csv(cap_path, encoding='utf-8')
+            except UnicodeDecodeError:
+                cap_df = pd.read_csv(cap_path, encoding='latin1')
+
+            # Padronizar nome do estádio para merge
+            cap_df["Stadium_clean"] = cap_df["Stadium"].str.strip().str.lower()
+            df["Stadium_clean"] = df["Stadium"].str.strip().str.lower()
+
+            # Merge left: adiciona Capacity se existir
+            df = df.merge(
+                cap_df[["Stadium_clean", "Capacity"]],
+                on="Stadium_clean",
+                how="left"
+            )
+            df.drop(columns=["Stadium_clean"], inplace=True)
+
+            # Converter capacidade para número e criar coluna de exibição
+            if "Capacity" in df.columns:
+                df["Capacity"] = pd.to_numeric(df["Capacity"], errors="coerce").fillna(0).astype(int)
+                df["Capacity_display"] = df["Capacity"].apply(lambda x: f"{x:,}" if x > 0 else "N/A")
+            else:
+                df["Capacity"] = 0
+                df["Capacity_display"] = "N/A"
+        else:
+            df["Capacity"] = 0
+            df["Capacity_display"] = "N/A"
 
         return df
 
@@ -755,10 +785,11 @@ with tab7:
                 "Team": True,
                 "League": True,
                 "Country": True,
+                "Capacity_display": True,   # mostra capacidade no hover
                 "Latitude": False,
                 "Longitude": False
             },
-            color_discrete_sequence=[ACCENT],  # cor dourada única
+            color_discrete_sequence=[ACCENT],
             projection="natural earth",
             title=f"Estádios ({len(df_plot)} de {len(df_stadiums)})"
         )
@@ -766,18 +797,18 @@ with tab7:
         # Configuração visual do globo
         fig.update_geos(
             showland=True,
-            landcolor="rgb(243, 243, 243)",          # cinza bem claro para terra
+            landcolor="rgb(243, 243, 243)",
             showocean=True,
-            oceancolor="rgb(230, 240, 255)",         # azul bem suave para mar
+            oceancolor="rgb(230, 240, 255)",
             showcountries=True,
-            countrycolor="rgb(180, 180, 180)",       # bordas dos países
+            countrycolor="rgb(180, 180, 180)",
             coastlinecolor="rgb(150, 150, 150)",
             showframe=False
         )
 
         fig.update_traces(marker=dict(size=5, opacity=0.7, line=dict(width=0.5, color='DarkSlateGrey')))
 
-        # Layout interativo: zoom e pan já são nativos, mas podemos configurar limites e botões
+        # Layout interativo
         fig.update_layout(
             template=PLOTLY_TEMPLATE,
             height=600,
@@ -785,10 +816,9 @@ with tab7:
             showlegend=False,
             geo=dict(
                 bgcolor='rgba(255,255,255,0)',
-                projection_scale=1,            # escala inicial
-                center=dict(lon=0, lat=20),    # centro inicial do mapa
+                projection_scale=1,
+                center=dict(lon=0, lat=20),
             ),
-            # Botões de controle de zoom (opcional)
             modebar_add=['zoomInGeo', 'zoomOutGeo', 'resetGeo']
         )
 
@@ -814,15 +844,19 @@ with tab7:
         if time_sel != "Todos" and "Team" in df_filtrado.columns:
             df_filtrado = df_filtrado[df_filtrado["Team"] == time_sel]
 
-        colunas_exibir = ["Stadium", "Team", "League", "Country"]
+        # Colunas a exibir (incluindo capacidade)
+        colunas_exibir = ["Stadium", "Team", "League", "Country", "Capacity_display"]
         colunas_disponiveis = [c for c in colunas_exibir if c in df_filtrado.columns]
+        # Renomear Capacity_display para "Capacidade" na visualização
+        df_display = df_filtrado[colunas_disponiveis].rename(columns={"Capacity_display": "Capacidade"})
+
         st.dataframe(
-            df_filtrado[colunas_disponiveis],
+            df_display,
             use_container_width=True,
             hide_index=True,
             height=400
         )
-        st.caption(f"Mostrando {len(df_filtrado)} estádios de um total de {len(df_stadiums)} com coordenadas.")
+        st.caption(f"Mostrando {len(df_display)} estádios de um total de {len(df_stadiums)} com coordenadas.")
     else:
         st.info("Nenhum dado de estádio com coordenadas disponível. Adicione o arquivo 'top_1000_stadiums_world.csv' na pasta data/")
 
