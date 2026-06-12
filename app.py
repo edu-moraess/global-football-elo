@@ -35,8 +35,8 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-ACCENT = "#d4af37"    # gold
-ACCENT2 = "#1f77b4"   # blue
+ACCENT = "#d4af37"
+ACCENT2 = "#1f77b4"
 POSITIVE = "#2ca02c"
 NEGATIVE = "#d62728"
 
@@ -195,7 +195,7 @@ tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
 
 
 # ---------------------------------------------------------------------------
-# TAB 1 — ELO RANKING & EVOLUÇÃO (VERSÃO ENRIQUECIDA)
+# TAB 1 — ELO RANKING & EVOLUÇÃO (CORRIGIDA)
 # ---------------------------------------------------------------------------
 with tab1:
     st.subheader("📊 Ranking e Métricas Avançadas")
@@ -219,11 +219,14 @@ with tab1:
             elo_12m = elo_atual
         delta_12m = elo_atual - elo_12m
         
-        # Força ofensiva/defensiva (do STRENGTH)
-        atk = STRENGTH.get(team, {}).get("attack", 1.0)
-        defense = STRENGTH.get(team, {}).get("defense", 1.0)
+        # Força ofensiva/defensiva (acesso seguro)
+        team_strength = STRENGTH.get(team, {})
+        if isinstance(team_strength, dict):
+            atk = team_strength.get("attack", 1.0)
+            defense = team_strength.get("defense", 1.0)
+        else:
+            atk, defense = 1.0, 1.0
         
-        # Número de jogos nos últimos 12 meses
         jogos_12m = len(recent_12m[recent_12m["team"] == team])
         
         ranking_data.append({
@@ -237,10 +240,10 @@ with tab1:
         })
     
     ranking_df = pd.DataFrame(ranking_data).sort_values("Elo", ascending=False).reset_index(drop=True)
-    ranking_df.index += 1
-    ranking_df.index.name = "Rank"
+    # Adicionar coluna de Rank (índice baseado em 1)
+    ranking_df.insert(0, "Rank", range(1, len(ranking_df) + 1))
     
-    # Heurística para variação de posição (Δ Pos)
+    # Heurística para variação de posição (Δ Pos) – usando a coluna Rank recém-criada
     ranking_df["PosAnterior"] = ranking_df["Rank"] + (ranking_df["Δ12m"] / 5).round().astype(int)
     ranking_df["ΔPos"] = ranking_df["PosAnterior"] - ranking_df["Rank"]
     ranking_df["ΔPos"] = ranking_df["ΔPos"].clip(-20, 20)
@@ -260,6 +263,7 @@ with tab1:
             use_container_width=True,
             height=500,
             column_config={
+                "Rank": st.column_config.NumberColumn("Rank", format="%d"),
                 "Elo": st.column_config.ProgressColumn("Elo", min_value=1300, max_value=2100, format="%.0f"),
                 "Δ12m": st.column_config.Column("Δ12m", help="Variação nos últimos 12 meses"),
                 "ΔPos": st.column_config.Column("Δ Pos.", help="Variação aproximada de posição (estimada)"),
@@ -422,7 +426,7 @@ with tab1:
 
 
 # ---------------------------------------------------------------------------
-# TAB 2 — HEAD TO HEAD
+# TAB 2 — HEAD TO HEAD (mantido original)
 # ---------------------------------------------------------------------------
 with tab2:
     st.subheader("Confronto Direto")
