@@ -30,13 +30,11 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# Accent colors that work on both light and dark Streamlit themes
 ACCENT = "#d4af37"    # gold
 ACCENT2 = "#1f77b4"   # blue
 POSITIVE = "#2ca02c"
 NEGATIVE = "#d62728"
 
-# Plotly template that adapts to Streamlit's active theme (no hardcoded bg)
 PLOTLY_TEMPLATE = dict(
     layout=go.Layout(
         paper_bgcolor="rgba(0,0,0,0)",
@@ -92,7 +90,6 @@ def elo_tier(elo):
 
 
 def form_pills_html(results_df, team, n=5):
-    """Build last-N form pills (W/D/L) for a team, most recent first."""
     sub = results_df[(results_df["home_team"] == team) | (results_df["away_team"] == team)].sort_values("date", ascending=False).head(n)
     html = ""
     for _, r in sub.iterrows():
@@ -154,7 +151,7 @@ def load_club_dataset():
     try:
         return load_club_data()
     except FileNotFoundError:
-        st.warning("Diretório 'data_clubs' não encontrado ou arquivos ausentes. Módulo de clubes indisponível.")
+        st.warning("Diretório 'data_clubs' não encontrado. Módulo de clubes indisponível.")
         return None
 
 
@@ -242,7 +239,6 @@ with tab1:
         else:
             st.info("Selecione ao menos uma seleção.")
 
-        # Top movers (últimos 2 anos)
         st.subheader("Maiores Variações de Rating (últimos 24 meses)")
         cutoff = HISTORY["date"].max() - pd.DateOffset(months=24)
         recent = HISTORY[HISTORY["date"] >= cutoff]
@@ -318,7 +314,6 @@ with tab2:
                 unsafe_allow_html=True
             )
 
-        # Pizza de resultados + linha temporal de gols
         col1, col2 = st.columns([1, 2])
         with col1:
             pie = go.Figure(data=[go.Pie(
@@ -343,7 +338,6 @@ with tab2:
                                yaxis_title="Saldo de gols")
             st.plotly_chart(bar, use_container_width=True)
 
-        # Shootouts
         so = DATA["shootouts"]
         so_h2h = so[
             ((so["home_team"] == team_a) & (so["away_team"] == team_b)) |
@@ -359,7 +353,6 @@ with tab2:
             use_container_width=True, hide_index=True, height=300
         )
 
-        # Top scorers in this matchup
         gs = DATA["goalscorers"]
         gs_h2h = gs[
             ((gs["home_team"] == team_a) & (gs["away_team"] == team_b)) |
@@ -379,7 +372,7 @@ with tab3:
     st.subheader("Modelo de Predição (Poisson Bivariado)")
     st.markdown(
         '<div class="caption-box">Estimativa de força ofensiva/defensiva calculada a partir dos últimos 10 anos de jogos. '
-        'λ (lambda) representa o número esperado de gols de cada seleção, usado para gerar a matriz de probabilidade de placares.</div>',
+        'λ (lambda) representa o número esperado de gols de cada seleção.</div>',
         unsafe_allow_html=True
     )
 
@@ -397,8 +390,6 @@ with tab3:
         st.warning("Selecione seleções diferentes.")
     else:
         result = poisson_match_probs(home_pred, away_pred, STRENGTH, DATA["avg_home"], DATA["avg_away"])
-
-        # Elo-based probabilities for comparison
         elo_h = CURRENT_RATINGS.get(home_pred, INITIAL_ELO)
         elo_a = CURRENT_RATINGS.get(away_pred, INITIAL_ELO)
         p_elo_home, p_elo_away = predict_match(elo_h, elo_a, neutral=neutral_pred)
@@ -408,7 +399,6 @@ with tab3:
         m2.metric("Empate", f"{result['p_draw']*100:.1f}%")
         m3.metric(f"Vitória {away_pred}", f"{result['p_away_win']*100:.1f}%")
 
-        # Stacked probability gauge
         gauge = go.Figure()
         gauge.add_trace(go.Bar(
             x=[result["p_home_win"]*100], y=["Probabilidade"], orientation="h",
@@ -435,9 +425,8 @@ with tab3:
         m5.metric(f"λ gols {away_pred}", f"{result['lambda_away']:.2f}")
         m6.metric("Elo (referência)", f"{elo_h:.0f} vs {elo_a:.0f}")
 
-        st.caption(f"Probabilidade implícita por Elo: {home_pred} {p_elo_home*100:.1f}% — {away_pred} {p_elo_away*100:.1f}% (modelo simplificado, sem considerar empate)")
+        st.caption(f"Probabilidade implícita por Elo: {home_pred} {p_elo_home*100:.1f}% — {away_pred} {p_elo_away*100:.1f}% (modelo simplificado)")
 
-        # Score matrix heatmap
         max_g = 6
         sm = result["score_matrix"][:max_g+1, :max_g+1]
         heat = go.Figure(data=go.Heatmap(
@@ -454,7 +443,6 @@ with tab3:
         )
         st.plotly_chart(heat, use_container_width=True)
 
-        # Most likely scorelines
         flat = []
         for i in range(max_g+1):
             for j in range(max_g+1):
@@ -471,16 +459,13 @@ with tab3:
 with tab4:
     st.subheader("Análise por Competição")
 
-    # Obter lista de torneios (excluindo valores nulos)
     torneios = sorted(RESULTS["tournament"].dropna().unique())
     selected_tournament = st.selectbox("Escolha uma competição", torneios)
 
-    # Filtrar partidas
     df_tourn = RESULTS[RESULTS["tournament"] == selected_tournament].copy()
     if df_tourn.empty:
-        st.warning("Nenhuma partida encontrada para esta competição.")
+        st.warning("Nenhuma partida encontrada.")
     else:
-        # Métricas gerais
         col1, col2, col3, col4 = st.columns(4)
         total_jogos = len(df_tourn)
         total_gols = df_tourn["home_score"].sum() + df_tourn["away_score"].sum()
@@ -492,14 +477,13 @@ with tab4:
         col3.metric("Média de gols/jogo", f"{media_gols:.2f}")
         col4.metric("Países participantes", times_distintos)
 
-        # Artilheiros (se houver dados)
         gs = DATA["goalscorers"]
         gs_tourn = gs.merge(
             df_tourn[["date", "home_team", "away_team"]],
             on=["date", "home_team", "away_team"],
             how="inner"
         )
-        gs_tourn = gs_tourn[gs_tourn["own_goal"] != True]  # excluir gols contra
+        gs_tourn = gs_tourn[gs_tourn["own_goal"] != True]
         if not gs_tourn.empty:
             top_scorers = (
                 gs_tourn.groupby("scorer")
@@ -510,10 +494,7 @@ with tab4:
             )
             st.subheader("Artilheiros do torneio")
             st.dataframe(top_scorers, use_container_width=True, hide_index=True)
-        else:
-            st.info("Dados de artilheiros não disponíveis para esta competição.")
 
-        # Evolução dos gols ao longo das edições (agrupando por ano)
         df_tourn["year"] = df_tourn["date"].dt.year
         gols_por_ano = df_tourn.groupby("year").apply(
             lambda x: x["home_score"].sum() + x["away_score"].sum()
@@ -523,148 +504,96 @@ with tab4:
 
 
 # ---------------------------------------------------------------------------
-# TAB 5 — PLAYER MARKET INTELLIGENCE
+# TAB 5 — PLAYER MARKET INTELLIGENCE (sem sub-abas, visualizações sequenciais)
 # ---------------------------------------------------------------------------
 with tab5:
     st.subheader("Inteligência de Mercado (Transfermarkt)")
 
-    # Verificar se dados de clubes foram carregados
     if CLUB_DATA is None:
-        st.error("Dados de clubes não disponíveis. Verifique os arquivos em data_clubs/")
+        st.error("Dados de clubes não disponíveis. Verifique o diretório 'data_clubs/' com os CSVs necessários.")
     else:
-        # Sub-abas internas
-        sub_tab5 = st.tabs([
-            "📈 Curva de Valorização por Idade",
-            "💸 Maiores Transferências",
-            "🌍 Fluxo de Transferências entre Ligas",
-            "🧬 Distribuição de Nacionalidades",
-            "🏢 Resumo por Clube"
-        ])
-
         # 1. Curva de valorização por idade
-        with sub_tab5[0]:
-            st.markdown("**Valor médio e mediano de mercado por idade**")
-            # Obter posições disponíveis
-            positions = ["Todas"] + sorted(CLUB_DATA["players"]["position"].dropna().unique())
-            pos_filter = st.selectbox("Filtrar por posição", positions, key="pos_curve")
-            curve_df = valuation_age_curve(
-                CLUB_DATA["valuations"],
-                CLUB_DATA["players"],
-                position_filter=None if pos_filter == "Todas" else pos_filter,
-                min_value=10000
-            )
-            if curve_df is not None and not curve_df.empty:
-                fig = go.Figure()
-                fig.add_trace(go.Scatter(
-                    x=curve_df["age_bucket"], y=curve_df["mean"],
-                    mode="lines+markers", name="Média", line=dict(color=ACCENT)
-                ))
-                fig.add_trace(go.Scatter(
-                    x=curve_df["age_bucket"], y=curve_df["median"],
-                    mode="lines+markers", name="Mediana", line=dict(color=ACCENT2, dash="dash")
-                ))
-                fig.update_layout(
-                    template=PLOTLY_TEMPLATE,
-                    title=f"Valor de mercado por idade – {pos_filter}",
-                    xaxis_title="Idade (anos)",
-                    yaxis_title="Valor de mercado (€)",
-                    hovermode="x"
-                )
-                st.plotly_chart(fig, use_container_width=True)
-            else:
-                st.info("Dados insuficientes para esta posição/filtro.")
+        st.markdown("### 📈 Curva de Valorização por Idade")
+        positions = ["Todas"] + sorted(CLUB_DATA["players"]["position"].dropna().unique())
+        pos_filter = st.selectbox("Filtrar por posição", positions, key="pos_curve")
+        curve_df = valuation_age_curve(
+            CLUB_DATA["valuations"], CLUB_DATA["players"],
+            position_filter=None if pos_filter == "Todas" else pos_filter,
+            min_value=10000
+        )
+        if curve_df is not None and not curve_df.empty:
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(x=curve_df["age_bucket"], y=curve_df["mean"],
+                                     mode="lines+markers", name="Média", line=dict(color=ACCENT)))
+            fig.add_trace(go.Scatter(x=curve_df["age_bucket"], y=curve_df["median"],
+                                     mode="lines+markers", name="Mediana", line=dict(color=ACCENT2, dash="dash")))
+            fig.update_layout(template=PLOTLY_TEMPLATE, height=450,
+                              xaxis_title="Idade (anos)", yaxis_title="Valor de mercado (€)")
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info("Dados insuficientes para esta posição/filtro.")
 
         # 2. Maiores transferências
-        with sub_tab5[1]:
-            st.markdown("**Top 20 transferências mais caras**")
-            top_df = top_transfers(CLUB_DATA["transfers"], n=20, min_fee=1_000_000)
-            # Formatar valores
-            top_df["transfer_fee_meur"] = top_df["transfer_fee"] / 1e6
-            top_df = top_df.rename(columns={
-                "transfer_date": "Data",
-                "player_name": "Jogador",
-                "from_club_name": "Clube Origem",
-                "to_club_name": "Clube Destino",
-                "transfer_fee_meur": "Valor (M€)",
-                "transfer_season": "Temporada"
-            })
-            st.dataframe(top_df[["Data", "Jogador", "Clube Origem", "Clube Destino", "Valor (M€)", "Temporada"]],
-                         use_container_width=True, hide_index=True)
+        st.markdown("### 💸 Maiores Transferências da História")
+        top_df = top_transfers(CLUB_DATA["transfers"], n=20, min_fee=1_000_000)
+        top_df["Valor (M€)"] = (top_df["transfer_fee"] / 1e6).round(1)
+        top_df = top_df.rename(columns={
+            "transfer_date": "Data", "player_name": "Jogador",
+            "from_club_name": "Origem", "to_club_name": "Destino", "transfer_season": "Temporada"
+        })
+        st.dataframe(top_df[["Data", "Jogador", "Origem", "Destino", "Valor (M€)", "Temporada"]],
+                     use_container_width=True, hide_index=True)
 
         # 3. Fluxo de transferências entre ligas (Sankey)
-        with sub_tab5[2]:
-            st.markdown("**Fluxo financeiro de transferências entre ligas**")
-            # Permitir selecionar temporada
-            seasons = sorted(CLUB_DATA["transfers"]["transfer_season"].dropna().unique())
-            selected_season = st.selectbox("Temporada", ["Todas"] + list(seasons))
-            season_param = None if selected_season == "Todas" else selected_season
-            flow_df = transfer_flow_by_league(
-                CLUB_DATA["transfers"],
-                CLUB_DATA["clubs"],
-                season=season_param,
-                top_n=12,
-                min_fee=500_000
-            )
-            if not flow_df.empty:
-                # Preparar nós e links para Sankey
-                labels = list(pd.unique(flow_df[["from_league", "to_league"]].values.ravel()))
-                label_to_idx = {label: i for i, label in enumerate(labels)}
-                sources = flow_df["from_league"].map(label_to_idx).tolist()
-                targets = flow_df["to_league"].map(label_to_idx).tolist()
-                values = flow_df["transfer_fee"].tolist()
-
-                fig_sankey = go.Figure(data=[go.Sankey(
-                    node=dict(
-                        pad=15,
-                        thickness=20,
-                        line=dict(color="black", width=0.5),
-                        label=labels,
-                        color=ACCENT
-                    ),
-                    link=dict(
-                        source=sources,
-                        target=targets,
-                        value=values,
-                        color="rgba(31, 119, 180, 0.4)"
-                    )
-                )])
-                fig_sankey.update_layout(title="Fluxo de investimento entre ligas (€)", height=600)
-                st.plotly_chart(fig_sankey, use_container_width=True)
-            else:
-                st.info("Nenhum fluxo significativo para os filtros selecionados.")
+        st.markdown("### 🌍 Fluxo Financeiro entre Ligas")
+        seasons = sorted(CLUB_DATA["transfers"]["transfer_season"].dropna().unique())
+        selected_season = st.selectbox("Temporada", ["Todas"] + list(seasons))
+        season_param = None if selected_season == "Todas" else selected_season
+        flow_df = transfer_flow_by_league(CLUB_DATA["transfers"], CLUB_DATA["clubs"],
+                                          season=season_param, top_n=12, min_fee=500_000)
+        if not flow_df.empty:
+            labels = list(pd.unique(flow_df[["from_league", "to_league"]].values.ravel()))
+            label_to_idx = {label: i for i, label in enumerate(labels)}
+            fig_sankey = go.Figure(data=[go.Sankey(
+                node=dict(pad=15, thickness=20, label=labels, color=ACCENT),
+                link=dict(source=flow_df["from_league"].map(label_to_idx).tolist(),
+                          target=flow_df["to_league"].map(label_to_idx).tolist(),
+                          value=flow_df["transfer_fee"].tolist(),
+                          color="rgba(31,119,180,0.4"))
+            )])
+            fig_sankey.update_layout(title=f"Fluxo de investimento – {selected_season}", height=600)
+            st.plotly_chart(fig_sankey, use_container_width=True)
+        else:
+            st.info("Nenhum fluxo significativo para os filtros selecionados.")
 
         # 4. Distribuição de nacionalidades
-        with sub_tab5[3]:
-            st.markdown("**Nacionalidades mais representadas**")
-            # Permitir filtrar por competição
-            comps = ["Todas"] + sorted(CLUB_DATA["players"]["current_club_domestic_competition_id"].dropna().unique())
-            comp_filter = st.selectbox("Liga", comps)
-            comp_id = None if comp_filter == "Todas" else comp_filter
-            nat_df = nationality_distribution(CLUB_DATA["players"], competition_id=comp_id)
-            if not nat_df.empty:
-                top_nat = nat_df.head(15)
-                fig_nat = px.bar(top_nat, x="Jogadores", y="País", orientation="h",
-                                 title="Número de jogadores por nacionalidade")
-                st.plotly_chart(fig_nat, use_container_width=True)
-            else:
-                st.info("Dados insuficientes.")
+        st.markdown("### 🧬 Nacionalidades mais Representadas")
+        comps = ["Todas"] + sorted(CLUB_DATA["players"]["current_club_domestic_competition_id"].dropna().unique())
+        comp_filter = st.selectbox("Liga", comps)
+        comp_id = None if comp_filter == "Todas" else comp_filter
+        nat_df = nationality_distribution(CLUB_DATA["players"], competition_id=comp_id)
+        if not nat_df.empty:
+            fig_nat = px.bar(nat_df.head(15), x="Jogadores", y="País", orientation="h",
+                             title=f"Top 15 nacionalidades – {comp_filter}")
+            st.plotly_chart(fig_nat, use_container_width=True)
+        else:
+            st.info("Dados insuficientes.")
 
         # 5. Resumo por clube
-        with sub_tab5[4]:
-            st.markdown("**Visão geral de clubes**")
-            club_summary_df = club_summary(CLUB_DATA["clubs"], CLUB_DATA["players"])
-            if club_summary_df is not None and not club_summary_df.empty:
-                club_names = sorted(club_summary_df["name"].unique())
-                selected_club = st.selectbox("Selecione um clube", club_names)
-                club_row = club_summary_df[club_summary_df["name"] == selected_club].iloc[0]
-                col1, col2, col3, col4 = st.columns(4)
-                col1.metric("Valor do elenco", f"€{club_row['squad_value_eur']/1e9:.2f}B")
-                col2.metric("Elenco", int(club_row['squad_size']))
-                col3.metric("Idade média", f"{club_row['average_age']:.1f}")
-                col4.metric("Estrangeiros", f"{club_row['foreigners_percentage']:.1f}%")
-                st.metric("Jogadores na seleção nacional", int(club_row['national_team_players']))
-            else:
-                st.warning("Não foi possível carregar dados dos clubes.")
+        st.markdown("### 🏢 Visão Geral de Clube")
+        club_summary_df = club_summary(CLUB_DATA["clubs"], CLUB_DATA["players"])
+        if club_summary_df is not None and not club_summary_df.empty:
+            club_names = sorted(club_summary_df["name"].unique())
+            selected_club = st.selectbox("Selecione um clube", club_names)
+            club_row = club_summary_df[club_summary_df["name"] == selected_club].iloc[0]
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("Valor do elenco", f"€{club_row['squad_value_eur']/1e9:.2f}B")
+            m2.metric("Elenco", int(club_row['squad_size']))
+            m3.metric("Idade média", f"{club_row['average_age']:.1f}")
+            m4.metric("Estrangeiros", f"{club_row['foreigners_percentage']:.1f}%")
+            st.metric("Jogadores na seleção nacional", int(club_row['national_team_players']))
+        else:
+            st.warning("Dados de clubes não disponíveis para esta visualização.")
 
 
 # ---------------------------------------------------------------------------
