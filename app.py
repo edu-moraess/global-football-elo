@@ -400,7 +400,6 @@ with tab1:
         history_heat["year"] = history_heat["date"].dt.year
         heat_pivot = history_heat.groupby(["year", "team"])["elo"].mean().reset_index()
         heat_pivot = heat_pivot.pivot(index="team", columns="year", values="elo")
-        # Preencher valores faltantes com forward fill e depois backward
         heat_pivot = heat_pivot.fillna(method='ffill', axis=1).fillna(method='bfill', axis=1).fillna(INITIAL_ELO)
         heat_pivot = heat_pivot.reindex(ranking_df.head(n_heat)["Seleção"].tolist())
         fig_heat = go.Figure(data=go.Heatmap(
@@ -423,7 +422,7 @@ with tab1:
 
 
 # ---------------------------------------------------------------------------
-# TAB 2 — HEAD TO HEAD (mantido original)
+# TAB 2 — HEAD TO HEAD
 # ---------------------------------------------------------------------------
 with tab2:
     st.subheader("Confronto Direto")
@@ -530,7 +529,7 @@ with tab2:
 
 
 # ---------------------------------------------------------------------------
-# TAB 3 — POISSON PREDICTION (mantido original)
+# TAB 3 — POISSON PREDICTION
 # ---------------------------------------------------------------------------
 with tab3:
     st.subheader("Modelo de Predição (Poisson Bivariado)")
@@ -618,7 +617,7 @@ with tab3:
 
 
 # ---------------------------------------------------------------------------
-# TAB 4 — TOURNAMENT ANALYTICS (mantido original)
+# TAB 4 — TOURNAMENT ANALYTICS
 # ---------------------------------------------------------------------------
 with tab4:
     st.subheader("Análise por Competição")
@@ -668,7 +667,7 @@ with tab4:
 
 
 # ---------------------------------------------------------------------------
-# TAB 5 — PLAYER MARKET INTELLIGENCE (mantido original)
+# TAB 5 — PLAYER MARKET INTELLIGENCE
 # ---------------------------------------------------------------------------
 with tab5:
     st.subheader("Inteligência de Mercado — Jogadores & Transferências")
@@ -805,7 +804,7 @@ with tab5:
 
 
 # ---------------------------------------------------------------------------
-# TAB 6 — METODOLOGIA (mantido original)
+# TAB 6 — METODOLOGIA
 # ---------------------------------------------------------------------------
 with tab6:
     st.subheader("Metodologia e Fontes")
@@ -842,7 +841,7 @@ with tab6:
 
 
 # ---------------------------------------------------------------------------
-# TAB 7 — ESTÁDIOS (MAPA REAL COM FOLIUM + OPENSTREETMAP) - CORRIGIDO
+# TAB 7 — ESTÁDIOS (MAPA REAL COM FOLIUM + OPENSTREETMAP)
 # ---------------------------------------------------------------------------
 with tab7:
     st.subheader("🗺️ Mapa Mundial de Estádios")
