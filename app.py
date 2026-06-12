@@ -700,16 +700,24 @@ with tab7:
         stadiums_gps = pd.DataFrame()
         stadiums_info = pd.DataFrame()
 
+        # Lê GPS – com fallback de encoding
         if gps_path.exists():
-            stadiums_gps = pd.read_csv(gps_path)
+            try:
+                stadiums_gps = pd.read_csv(gps_path, encoding='utf-8')
+            except UnicodeDecodeError:
+                stadiums_gps = pd.read_csv(gps_path, encoding='latin1')
             stadiums_gps["Latitude"] = pd.to_numeric(stadiums_gps.get("Latitude", pd.Series()), errors="coerce")
             stadiums_gps["Longitude"] = pd.to_numeric(stadiums_gps.get("Longitude", pd.Series()), errors="coerce")
             stadiums_gps = stadiums_gps.dropna(subset=["Latitude", "Longitude"])
         else:
             st.warning("Arquivo 'futebol_stadiums.csv' (com coordenadas) não encontrado em data/")
 
+        # Lê informações (capacidade, confederação etc.) – com fallback de encoding
         if info_path.exists():
-            stadiums_info = pd.read_csv(info_path)
+            try:
+                stadiums_info = pd.read_csv(info_path, encoding='utf-8')
+            except UnicodeDecodeError:
+                stadiums_info = pd.read_csv(info_path, encoding='latin1')
             stadiums_info.rename(columns={
                 "Stadium": "Stadium",
                 "Capacity": "Capacity",
