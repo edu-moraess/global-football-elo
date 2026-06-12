@@ -690,12 +690,16 @@ with tab6:
 # ---------------------------------------------------------------------------
 # TAB 7 — ESTÁDIOS (MAPA REAL COM FOLIUM + OPENSTREETMAP) - CORRIGIDO
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# TAB 7 — ESTÁDIOS (MAPA REAL COM FOLIUM + OPENSTREETMAP) - CORRIGIDO
+# ---------------------------------------------------------------------------
 with tab7:
     st.subheader("🗺️ Mapa Mundial de Estádios")
-    st.markdown("Use o scroll para zoom e arraste para navegar. Mapa real de ruas (OpenStreetMap), gratuito.")
+    st.markdown("Use o scroll para zoom e arraste para navegar. Mapa baseado em OpenStreetMap.")
 
     @st.cache_data
     def load_stadiums_data():
+        # ... (restante da função permanece igual)
         path = Path("data/top_1000_stadiums_world.csv")
         if not path.exists():
             st.warning("Arquivo 'top_1000_stadiums_world.csv' não encontrado em data/")
