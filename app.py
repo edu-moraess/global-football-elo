@@ -10,6 +10,11 @@ import plotly.express as px
 import plotly.graph_objects as go
 from pathlib import Path
 
+# ⚡ Para o mapa interativo real (OpenStreetMap)
+import folium
+from folium.plugins import MarkerCluster, Fullscreen
+from streamlit_folium import st_folium
+
 from elo_engine import (
     load_former_names, build_name_map, normalize_team_names,
     compute_elo_history, get_elo_timeseries, predict_match,
@@ -667,14 +672,14 @@ with tab6:
     - Curva de valorização por idade, maiores transferências, fluxo financeiro entre ligas, distribuição de nacionalidades e resumo financeiro dos clubes.
 
     ### 🗺️ **Estádios**
-    - Coordenadas geográficas via Wikidata (SPARQL) + enriquecimento com capacidade (Football Stadiums.csv).
-    - Mapa interativo com zoom, busca e filtros, incluindo time e capacidade.
+    - Coordenadas geográficas via Wikidata (SPARQL) + enriquecimento com capacidade.
+    - Mapa interativo baseado em OpenStreetMap (gratuito).
 
     ### 📂 **Fontes**
     - Partidas internacionais: [Football Results (1872-2024)](https://www.kaggle.com/datasets/martj42/international-football-results-from-1872-to-2017)
     - Dados de mercado: [Transfermarkt Dataset](https://www.kaggle.com/datasets/davidcariboo/player-scores)
     - Estádios: Wikidata SPARQL endpoint + Kaggle Football Stadiums
-    - Processamento e visualização: **Python, Pandas, Plotly, Streamlit**.
+    - Processamento e visualização: **Python, Pandas, Plotly, Streamlit, Folium**.
 
     ---
     **Desenvolvido por Eduardo Moraes**  
@@ -683,11 +688,11 @@ with tab6:
 
 
 # ---------------------------------------------------------------------------
-# TAB 7 — ESTÁDIOS (MAPA INTERATIVO COM CAPACIDADE)
+# TAB 7 — ESTÁDIOS (MAPA REAL COM FOLIUM + OPENSTREETMAP)
 # ---------------------------------------------------------------------------
 with tab7:
     st.subheader("🗺️ Mapa Mundial de Estádios")
-    st.markdown("Use o scroll do mouse para aproximar (zoom) e arraste para navegar. Passe o mouse sobre um ponto para ver detalhes.")
+    st.markdown("Use o scroll para zoom e arraste para navegar. Mapa real de ruas (OpenStreetMap), gratuito.")
 
     @st.cache_data
     def load_stadiums_data():
@@ -701,17 +706,14 @@ with tab7:
         except UnicodeDecodeError:
             df = pd.read_csv(path, encoding='latin1')
 
-        # Garantir que latitude e longitude sejam numéricos
         df["latitude"] = pd.to_numeric(df["latitude"], errors="coerce")
         df["longitude"] = pd.to_numeric(df["longitude"], errors="coerce")
         df = df.dropna(subset=["latitude", "longitude"])
 
-        # Preencher valores vazios
         df["team"] = df["team"].fillna("Desconhecido")
         df["league"] = df["league"].fillna("Desconhecida")
         df["country"] = df["country"].fillna("Desconhecido")
 
-        # Renomear colunas
         df = df.rename(columns={
             "stadium": "Stadium",
             "team": "Team",
@@ -721,27 +723,17 @@ with tab7:
             "longitude": "Longitude"
         })
 
-        # Tentar mesclar capacidade do arquivo Football Stadiums.csv
+        # Capacidade (se disponível)
         cap_path = Path("data/Football Stadiums.csv")
         if cap_path.exists():
             try:
                 cap_df = pd.read_csv(cap_path, encoding='utf-8')
             except UnicodeDecodeError:
                 cap_df = pd.read_csv(cap_path, encoding='latin1')
-
-            # Padronizar nome do estádio para merge
             cap_df["Stadium_clean"] = cap_df["Stadium"].str.strip().str.lower()
             df["Stadium_clean"] = df["Stadium"].str.strip().str.lower()
-
-            # Merge left: adiciona Capacity se existir
-            df = df.merge(
-                cap_df[["Stadium_clean", "Capacity"]],
-                on="Stadium_clean",
-                how="left"
-            )
+            df = df.merge(cap_df[["Stadium_clean", "Capacity"]], on="Stadium_clean", how="left")
             df.drop(columns=["Stadium_clean"], inplace=True)
-
-            # Converter capacidade para número e criar coluna de exibição
             if "Capacity" in df.columns:
                 df["Capacity"] = pd.to_numeric(df["Capacity"], errors="coerce").fillna(0).astype(int)
                 df["Capacity_display"] = df["Capacity"].apply(lambda x: f"{x:,}" if x > 0 else "N/A")
@@ -757,7 +749,6 @@ with tab7:
     df_stadiums = load_stadiums_data()
 
     if not df_stadiums.empty:
-        # Filtros interativos
         st.markdown("#### 🔍 Filtros do mapa")
         col1, col2 = st.columns([1, 2])
         with col1:
@@ -768,61 +759,57 @@ with tab7:
         with col2:
             busca = st.text_input("Buscar estádio por nome", "")
 
-        # Aplicar filtros
         df_plot = df_stadiums.copy()
         if pais_mapa != "Todos":
             df_plot = df_plot[df_plot["Country"] == pais_mapa]
         if busca:
             df_plot = df_plot[df_plot["Stadium"].str.contains(busca, case=False)]
 
-        # Criar mapa com Plotly scatter_geo
-        fig = px.scatter_geo(
-            df_plot,
-            lat="Latitude",
-            lon="Longitude",
-            hover_name="Stadium",
-            hover_data={
-                "Team": True,
-                "League": True,
-                "Country": True,
-                "Capacity_display": True,   # mostra capacidade no hover
-                "Latitude": False,
-                "Longitude": False
-            },
-            color_discrete_sequence=[ACCENT],
-            projection="natural earth",
-            title=f"Estádios ({len(df_plot)} de {len(df_stadiums)})"
-        )
+        # Criar mapa Folium
+        if not df_plot.empty:
+            # Centralizar no centro médio dos estádios
+            center_lat = df_plot["Latitude"].mean()
+            center_lon = df_plot["Longitude"].mean()
 
-        # Configuração visual do globo
-        fig.update_geos(
-            showland=True,
-            landcolor="rgb(243, 243, 243)",
-            showocean=True,
-            oceancolor="rgb(230, 240, 255)",
-            showcountries=True,
-            countrycolor="rgb(180, 180, 180)",
-            coastlinecolor="rgb(150, 150, 150)",
-            showframe=False
-        )
+            m = folium.Map(
+                location=[center_lat, center_lon],
+                zoom_start=2,
+                tiles='OpenStreetMap',   # mapa de ruas gratuito
+                control_scale=True
+            )
 
-        fig.update_traces(marker=dict(size=5, opacity=0.7, line=dict(width=0.5, color='DarkSlateGrey')))
+            # Adicionar opção de camadas (ruas / relevo / etc.)
+            folium.TileLayer('cartodbdark_matter', name='Escuro').add_to(m)
+            folium.TileLayer('stamenterrain', name='Terreno').add_to(m)
+            folium.TileLayer('openstreetmap', name='Ruas').add_to(m)
 
-        # Layout interativo
-        fig.update_layout(
-            template=PLOTLY_TEMPLATE,
-            height=600,
-            margin=dict(l=0, r=0, t=40, b=0),
-            showlegend=False,
-            geo=dict(
-                bgcolor='rgba(255,255,255,0)',
-                projection_scale=1,
-                center=dict(lon=0, lat=20),
-            ),
-            modebar_add=['zoomInGeo', 'zoomOutGeo', 'resetGeo']
-        )
+            # Cluster de marcadores para performance
+            marker_cluster = MarkerCluster(name="Estádios").add_to(m)
 
-        st.plotly_chart(fig, use_container_width=True)
+            for _, row in df_plot.iterrows():
+                popup_html = f"""
+                <b>{row['Stadium']}</b><br>
+                Time: {row['Team']}<br>
+                Liga: {row['League']}<br>
+                País: {row['Country']}<br>
+                Capacidade: {row['Capacity_display']}
+                """
+                folium.Marker(
+                    location=[row["Latitude"], row["Longitude"]],
+                    popup=folium.Popup(popup_html, max_width=300),
+                    icon=folium.Icon(color='gold', icon='futbol-o', prefix='fa')
+                ).add_to(marker_cluster)
+
+            # Controle de camadas
+            folium.LayerControl().add_to(m)
+            Fullscreen().add_to(m)  # botão de tela cheia
+
+            # Exibir mapa no Streamlit
+            st_folium(m, width=1400, height=700, returned_objects=[])
+
+            st.caption(f"Mostrando {len(df_plot)} estádios. Clique em um marcador para detalhes.")
+        else:
+            st.info("Nenhum estádio encontrado com os filtros atuais.")
 
         st.markdown("---")
         st.subheader("📋 Explorador de Estádios")
@@ -844,10 +831,8 @@ with tab7:
         if time_sel != "Todos" and "Team" in df_filtrado.columns:
             df_filtrado = df_filtrado[df_filtrado["Team"] == time_sel]
 
-        # Colunas a exibir (incluindo capacidade)
         colunas_exibir = ["Stadium", "Team", "League", "Country", "Capacity_display"]
         colunas_disponiveis = [c for c in colunas_exibir if c in df_filtrado.columns]
-        # Renomear Capacity_display para "Capacidade" na visualização
         df_display = df_filtrado[colunas_disponiveis].rename(columns={"Capacity_display": "Capacidade"})
 
         st.dataframe(
