@@ -195,81 +195,235 @@ tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
 
 
 # ---------------------------------------------------------------------------
-# TAB 1 — ELO RANKING
+# TAB 1 — ELO RANKING & EVOLUÇÃO (VERSÃO ENRIQUECIDA)
 # ---------------------------------------------------------------------------
 with tab1:
-    col_a, col_b = st.columns([1, 2])
+    st.subheader("📊 Ranking e Métricas Avançadas")
 
-    ranking_df = pd.DataFrame(
-        [{"Seleção": k, "Elo": round(v, 1), "Tier": elo_tier(v)[0]} for k, v in CURRENT_RATINGS.items()]
-    ).sort_values("Elo", ascending=False).reset_index(drop=True)
+    # Preparar dados de ranking com métricas adicionais
+    cutoff_12m = HISTORY["date"].max() - pd.DateOffset(months=12)
+    recent_12m = HISTORY[HISTORY["date"] >= cutoff_12m]
+    
+    ranking_data = []
+    for team in ALL_TEAMS:
+        elo_atual = CURRENT_RATINGS[team]
+        # Elo há 12 meses
+        ts = HISTORY[HISTORY["team"] == team].sort_values("date")
+        if len(ts) >= 2:
+            ts_before = ts[ts["date"] <= cutoff_12m]
+            if not ts_before.empty:
+                elo_12m = ts_before["elo"].iloc[-1]
+            else:
+                elo_12m = elo_atual
+        else:
+            elo_12m = elo_atual
+        delta_12m = elo_atual - elo_12m
+        
+        # Força ofensiva/defensiva (do STRENGTH)
+        atk = STRENGTH.get(team, {}).get("attack", 1.0)
+        defense = STRENGTH.get(team, {}).get("defense", 1.0)
+        
+        # Número de jogos nos últimos 12 meses
+        jogos_12m = len(recent_12m[recent_12m["team"] == team])
+        
+        ranking_data.append({
+            "Seleção": team,
+            "Elo": round(elo_atual, 1),
+            "Δ12m": round(delta_12m, 1),
+            "Ataque": round(atk, 2),
+            "Defesa": round(defense, 2),
+            "Jogos (12m)": jogos_12m,
+            "Tier": elo_tier(elo_atual)[0]
+        })
+    
+    ranking_df = pd.DataFrame(ranking_data).sort_values("Elo", ascending=False).reset_index(drop=True)
     ranking_df.index += 1
     ranking_df.index.name = "Rank"
-
-    with col_a:
-        st.subheader("Ranking Atual")
-        top_n = st.slider("Top N seleções", 5, 50, 20)
+    
+    # Heurística para variação de posição (Δ Pos)
+    ranking_df["PosAnterior"] = ranking_df["Rank"] + (ranking_df["Δ12m"] / 5).round().astype(int)
+    ranking_df["ΔPos"] = ranking_df["PosAnterior"] - ranking_df["Rank"]
+    ranking_df["ΔPos"] = ranking_df["ΔPos"].clip(-20, 20)
+    
+    # --- Layout com colunas ---
+    col_left, col_right = st.columns([1.2, 1.8])
+    
+    with col_left:
+        st.markdown("#### 🏆 Ranking Elo Atual")
+        top_n = st.slider("Top N seleções", 5, 50, 20, key="top_n_elo")
+        search_team = st.text_input("🔍 Buscar seleção", placeholder="Digite o nome...")
+        df_display = ranking_df.copy()
+        if search_team:
+            df_display = df_display[df_display["Seleção"].str.contains(search_team, case=False)]
         st.dataframe(
-            ranking_df.head(top_n),
+            df_display.head(top_n) if not search_team else df_display,
             use_container_width=True,
-            height=600,
+            height=500,
             column_config={
-                "Elo": st.column_config.ProgressColumn(
-                    "Elo", min_value=1300, max_value=2100, format="%.0f"
-                ),
-            },
+                "Elo": st.column_config.ProgressColumn("Elo", min_value=1300, max_value=2100, format="%.0f"),
+                "Δ12m": st.column_config.Column("Δ12m", help="Variação nos últimos 12 meses"),
+                "ΔPos": st.column_config.Column("Δ Pos.", help="Variação aproximada de posição (estimada)"),
+                "Ataque": st.column_config.NumberColumn("Força Ofensiva", format="%.2f"),
+                "Defesa": st.column_config.NumberColumn("Força Defensiva", format="%.2f"),
+                "Jogos (12m)": st.column_config.Column("Jogos", help="Partidas nos últimos 12 meses"),
+            }
         )
-
-    with col_b:
-        st.subheader("Evolução Histórica do Elo")
-        default_teams = [t for t in ["Brazil", "Germany", "Argentina", "France", "England"] if t in ALL_TEAMS]
-        selected_teams = st.multiselect(
+        
+        st.markdown("---")
+        st.markdown("#### 📈 Simulador de Confronto (via Elo)")
+        sim_home = st.selectbox("Seleção da casa", ALL_TEAMS, index=ALL_TEAMS.index("Brazil") if "Brazil" in ALL_TEAMS else 0, key="sim_home")
+        sim_away = st.selectbox("Seleção visitante", ALL_TEAMS, index=ALL_TEAMS.index("Argentina") if "Argentina" in ALL_TEAMS else 1, key="sim_away")
+        neutral_sim = st.checkbox("Campo neutro", value=True, key="neutral_sim")
+        if sim_home != sim_away:
+            elo_h = CURRENT_RATINGS.get(sim_home, INITIAL_ELO)
+            elo_a = CURRENT_RATINGS.get(sim_away, INITIAL_ELO)
+            p_h, p_a = predict_match(elo_h, elo_a, neutral=neutral_sim)
+            st.metric(f"{sim_home} vence", f"{p_h*100:.1f}%")
+            st.metric(f"{sim_away} vence", f"{p_a*100:.1f}%")
+            st.caption(f"Empate: {(1-p_h-p_a)*100:.1f}%")
+        else:
+            st.warning("Selecione seleções diferentes.")
+    
+    with col_right:
+        st.markdown("#### 📊 Distribuição de Elo")
+        fig_hist = px.histogram(ranking_df, x="Elo", nbins=30, 
+                                color_discrete_sequence=[ACCENT],
+                                marginal="box", title="Frequência de Ratings")
+        fig_hist.update_layout(template=PLOTLY_TEMPLATE, height=350)
+        st.plotly_chart(fig_hist, use_container_width=True)
+        
+        st.markdown("#### 📉 Maiores Altas e Quedas (últimos 12 meses)")
+        col_up, col_down = st.columns(2)
+        top_risers = ranking_df.nlargest(8, "Δ12m")[["Seleção", "Δ12m"]]
+        top_fallers = ranking_df.nsmallest(8, "Δ12m")[["Seleção", "Δ12m"]]
+        with col_up:
+            fig_up = px.bar(top_risers, x="Δ12m", y="Seleção", orientation="h", 
+                            title="Em ascensão", color="Δ12m", color_continuous_scale="Greens")
+            fig_up.update_layout(template=PLOTLY_TEMPLATE, height=300, showlegend=False)
+            st.plotly_chart(fig_up, use_container_width=True)
+        with col_down:
+            fig_down = px.bar(top_fallers, x="Δ12m", y="Seleção", orientation="h",
+                              title="Em queda", color="Δ12m", color_continuous_scale="Reds")
+            fig_down.update_layout(template=PLOTLY_TEMPLATE, height=300, showlegend=False)
+            st.plotly_chart(fig_down, use_container_width=True)
+    
+    st.markdown("---")
+    
+    # --- Evolução histórica com controle de período e suavização ---
+    st.subheader("📅 Evolução Histórica do Elo")
+    col_ts1, col_ts2 = st.columns([1, 1])
+    with col_ts1:
+        selected_teams_ts = st.multiselect(
             "Selecione seleções para comparar",
             ALL_TEAMS,
-            default=default_teams or ALL_TEAMS[:5],
+            default=["Brazil", "Germany", "Argentina"] if "Brazil" in ALL_TEAMS else ALL_TEAMS[:3],
+            key="ts_teams"
         )
-
-        if selected_teams:
-            fig = go.Figure()
-            for team in selected_teams:
-                ts = get_elo_timeseries(HISTORY, team)
-                if ts.empty:
-                    continue
-                fig.add_trace(go.Scatter(
-                    x=ts["date"], y=ts["elo"], mode="lines", name=team, line=dict(width=1.8)
-                ))
-            fig.update_layout(
-                template=PLOTLY_TEMPLATE,
-                height=560,
-                title="Trajetória de Rating Elo (1872 — presente)",
-                xaxis_title="Data", yaxis_title="Elo Rating",
-                hovermode="x unified",
-            )
-            st.plotly_chart(fig, use_container_width=True)
+    with col_ts2:
+        smooth_window = st.slider("Suavização (média móvel em jogos)", 1, 20, 5, help="Média móvel para suavizar a curva")
+        start_date = HISTORY["date"].min().date()
+        end_date = HISTORY["date"].max().date()
+        date_range = st.slider("Período", min_value=start_date, max_value=end_date, value=(start_date, end_date))
+    
+    if selected_teams_ts:
+        fig_ts = go.Figure()
+        for team in selected_teams_ts:
+            ts = get_elo_timeseries(HISTORY, team)
+            if ts.empty:
+                continue
+            ts = ts[(ts["date"] >= pd.Timestamp(date_range[0])) & (ts["date"] <= pd.Timestamp(date_range[1]))]
+            if smooth_window > 1:
+                ts["elo_smooth"] = ts["elo"].rolling(smooth_window, min_periods=1).mean()
+                y_vals = ts["elo_smooth"]
+            else:
+                y_vals = ts["elo"]
+            fig_ts.add_trace(go.Scatter(x=ts["date"], y=y_vals, mode="lines", name=team, line=dict(width=2)))
+        fig_ts.update_layout(template=PLOTLY_TEMPLATE, height=450,
+                             title="Trajetória de Rating Elo (com suavização opcional)",
+                             xaxis_title="Data", yaxis_title="Elo Rating",
+                             hovermode="x unified")
+        st.plotly_chart(fig_ts, use_container_width=True)
+    else:
+        st.info("Selecione ao menos uma seleção para visualizar a evolução.")
+    
+    # --- Comparação de eras (seleção vs seu próprio histórico) ---
+    st.markdown("---")
+    st.subheader("⏳ Comparação com o Passado da Seleção")
+    col_era1, col_era2 = st.columns([1, 2])
+    with col_era1:
+        team_era = st.selectbox("Escolha uma seleção", ALL_TEAMS, key="team_era")
+    with col_era2:
+        hist_team = HISTORY[HISTORY["team"] == team_era].sort_values("date")
+        if not hist_team.empty:
+            max_elo = hist_team["elo"].max()
+            min_elo = hist_team["elo"].min()
+            current_elo = CURRENT_RATINGS[team_era]
+            max_date = hist_team[hist_team["elo"] == max_elo]["date"].iloc[0].strftime("%Y-%m")
+            min_date = hist_team[hist_team["elo"] == min_elo]["date"].iloc[0].strftime("%Y-%m")
+            st.metric("Elo Atual", f"{current_elo:.0f}")
+            st.metric("Pico Histórico", f"{max_elo:.0f} ({max_date})")
+            st.metric("Mínimo Histórico", f"{min_elo:.0f} ({min_date})")
+            compare_df = pd.DataFrame({
+                "Métrica": ["Atual", "Pico", "Mínimo"],
+                "Elo": [current_elo, max_elo, min_elo]
+            })
+            fig_comp = px.bar(compare_df, x="Métrica", y="Elo", color="Métrica", 
+                              color_discrete_sequence=[ACCENT, POSITIVE, NEGATIVE],
+                              title=f"Desempenho histórico de {team_era}")
+            fig_comp.update_layout(template=PLOTLY_TEMPLATE, height=300, showlegend=False)
+            st.plotly_chart(fig_comp, use_container_width=True)
         else:
-            st.info("Selecione ao menos uma seleção.")
-
-        st.subheader("Maiores Variações de Rating (últimos 24 meses)")
-        cutoff = HISTORY["date"].max() - pd.DateOffset(months=24)
-        recent = HISTORY[HISTORY["date"] >= cutoff]
-        movers = []
-        for team in ALL_TEAMS:
-            ts = recent[recent["team"] == team].sort_values("date")
-            if len(ts) >= 2:
-                delta = ts["elo"].iloc[-1] - ts["elo"].iloc[0]
-                movers.append({"Seleção": team, "Δ Elo (24m)": round(delta, 1), "Elo Atual": round(CURRENT_RATINGS[team], 1)})
-        movers_df = pd.DataFrame(movers)
-        c1, c2 = st.columns(2)
-        with c1:
-            st.markdown("**🔺 Em ascensão**")
-            st.dataframe(movers_df.sort_values("Δ Elo (24m)", ascending=False).head(10), use_container_width=True, hide_index=True)
-        with c2:
-            st.markdown("**🔻 Em queda**")
-            st.dataframe(movers_df.sort_values("Δ Elo (24m)").head(10), use_container_width=True, hide_index=True)
+            st.info("Sem dados históricos suficientes.")
+    
+    # --- Média de Elo por década (top 10) ---
+    st.markdown("---")
+    st.subheader("📅 Média de Elo por Década (Top 10)")
+    HISTORY_copy = HISTORY.copy()
+    HISTORY_copy["decade"] = (HISTORY_copy["date"].dt.year // 10) * 10
+    decades = sorted(HISTORY_copy["decade"].dropna().unique())
+    selected_decade = st.selectbox("Selecione a década", decades, index=len(decades)-1)
+    decade_data = HISTORY_copy[HISTORY_copy["decade"] == selected_decade]
+    avg_by_team = decade_data.groupby("team")["elo"].mean().sort_values(ascending=False).head(10).reset_index()
+    avg_by_team.columns = ["Seleção", "Elo Médio"]
+    fig_decade = px.bar(avg_by_team, x="Elo Médio", y="Seleção", orientation="h",
+                        color="Elo Médio", color_continuous_scale="Viridis",
+                        title=f"Top 10 seleções na década de {int(selected_decade)}")
+    fig_decade.update_layout(template=PLOTLY_TEMPLATE, height=400)
+    st.plotly_chart(fig_decade, use_container_width=True)
+    
+    # --- Heatmap de evolução (opcional) ---
+    with st.expander("🔥 Mapa de Calor da Evolução (seleções vs tempo)", expanded=False):
+        st.caption("Exibe a variação de Elo ao longo dos anos para as principais seleções. Pode demorar um pouco.")
+        n_heat = st.slider("Número de seleções no heatmap", 10, 50, 25)
+        top_teams_heat = ranking_df.head(n_heat)["Seleção"].tolist()
+        history_heat = HISTORY[HISTORY["team"].isin(top_teams_heat)].copy()
+        history_heat["year"] = history_heat["date"].dt.year
+        heat_pivot = history_heat.groupby(["year", "team"])["elo"].mean().reset_index()
+        heat_pivot = heat_pivot.pivot(index="team", columns="year", values="elo")
+        # Preencher valores faltantes com forward fill e depois backward
+        heat_pivot = heat_pivot.fillna(method='ffill', axis=1).fillna(method='bfill', axis=1).fillna(INITIAL_ELO)
+        heat_pivot = heat_pivot.reindex(ranking_df.head(n_heat)["Seleção"].tolist())
+        fig_heat = go.Figure(data=go.Heatmap(
+            z=heat_pivot.values,
+            x=heat_pivot.columns.astype(int),
+            y=heat_pivot.index,
+            colorscale="RdYlGn",
+            zmid=INITIAL_ELO,
+            colorbar=dict(title="Elo")
+        ))
+        fig_heat.update_layout(template=PLOTLY_TEMPLATE, height=500,
+                               title="Evolução do Rating Elo por Seleção (média anual)",
+                               xaxis_title="Ano", yaxis_title="Seleção")
+        st.plotly_chart(fig_heat, use_container_width=True)
+    
+    # --- Botão de exportação ---
+    st.markdown("---")
+    csv_ranking = ranking_df.to_csv(index=False).encode('utf-8')
+    st.download_button("📥 Baixar ranking atual (CSV)", data=csv_ranking, file_name="elo_ranking.csv", mime="text/csv")
 
 
 # ---------------------------------------------------------------------------
-# TAB 2 — HEAD TO HEAD
+# TAB 2 — HEAD TO HEAD (mantido original)
 # ---------------------------------------------------------------------------
 with tab2:
     st.subheader("Confronto Direto")
@@ -376,7 +530,7 @@ with tab2:
 
 
 # ---------------------------------------------------------------------------
-# TAB 3 — POISSON PREDICTION
+# TAB 3 — POISSON PREDICTION (mantido original)
 # ---------------------------------------------------------------------------
 with tab3:
     st.subheader("Modelo de Predição (Poisson Bivariado)")
@@ -464,7 +618,7 @@ with tab3:
 
 
 # ---------------------------------------------------------------------------
-# TAB 4 — TOURNAMENT ANALYTICS
+# TAB 4 — TOURNAMENT ANALYTICS (mantido original)
 # ---------------------------------------------------------------------------
 with tab4:
     st.subheader("Análise por Competição")
@@ -514,7 +668,7 @@ with tab4:
 
 
 # ---------------------------------------------------------------------------
-# TAB 5 — PLAYER MARKET INTELLIGENCE
+# TAB 5 — PLAYER MARKET INTELLIGENCE (mantido original)
 # ---------------------------------------------------------------------------
 with tab5:
     st.subheader("Inteligência de Mercado — Jogadores & Transferências")
@@ -651,7 +805,7 @@ with tab5:
 
 
 # ---------------------------------------------------------------------------
-# TAB 6 — METODOLOGIA
+# TAB 6 — METODOLOGIA (mantido original)
 # ---------------------------------------------------------------------------
 with tab6:
     st.subheader("Metodologia e Fontes")
@@ -673,7 +827,7 @@ with tab6:
 
     ### 🗺️ **Estádios**
     - Coordenadas geográficas via Wikidata (SPARQL) + enriquecimento com capacidade.
-    - Mapa interativo baseado em OpenStreetMap (gratuito).
+    - Mapa interativo baseado em OpenStreetMap.
 
     ### 📂 **Fontes**
     - Partidas internacionais: [Football Results (1872-2024)](https://www.kaggle.com/datasets/martj42/international-football-results-from-1872-to-2017)
@@ -690,16 +844,12 @@ with tab6:
 # ---------------------------------------------------------------------------
 # TAB 7 — ESTÁDIOS (MAPA REAL COM FOLIUM + OPENSTREETMAP) - CORRIGIDO
 # ---------------------------------------------------------------------------
-# ---------------------------------------------------------------------------
-# TAB 7 — ESTÁDIOS (MAPA REAL COM FOLIUM + OPENSTREETMAP) - CORRIGIDO
-# ---------------------------------------------------------------------------
 with tab7:
     st.subheader("🗺️ Mapa Mundial de Estádios")
     st.markdown("Use o scroll para zoom e arraste para navegar. Mapa baseado em OpenStreetMap.")
 
     @st.cache_data
     def load_stadiums_data():
-        # ... (restante da função permanece igual)
         path = Path("data/top_1000_stadiums_world.csv")
         if not path.exists():
             st.warning("Arquivo 'top_1000_stadiums_world.csv' não encontrado em data/")
@@ -769,22 +919,18 @@ with tab7:
         if busca:
             df_plot = df_plot[df_plot["Stadium"].str.contains(busca, case=False)]
 
-        # Criar mapa Folium
         if not df_plot.empty:
-            # Centralizar no centro médio dos estádios
             center_lat = df_plot["Latitude"].mean()
             center_lon = df_plot["Longitude"].mean()
 
-            # Mapa base: OpenStreetMap (ruas)
             m = folium.Map(
                 location=[center_lat, center_lon],
                 zoom_start=2,
                 tiles='OpenStreetMap',
                 control_scale=True,
-                attr='OpenStreetMap contributors'  # atribuição explícita
+                attr='OpenStreetMap contributors'
             )
 
-            # Adicionar camadas extras com atribuição correta
             folium.TileLayer(
                 tiles='CartoDB dark_matter',
                 name='Escuro',
@@ -797,14 +943,12 @@ with tab7:
                 attr='Map tiles by Stamen Design, under CC BY 3.0. Data by OpenStreetMap, under ODbL.'
             ).add_to(m)
 
-            # Camada 'Ruas' é opcional (já é a base), mas pode ser mantida como cópia
             folium.TileLayer(
                 tiles='OpenStreetMap',
                 name='Ruas',
                 attr='OpenStreetMap contributors'
             ).add_to(m)
 
-            # Cluster de marcadores para performance
             marker_cluster = MarkerCluster(name="Estádios").add_to(m)
 
             for _, row in df_plot.iterrows():
@@ -821,11 +965,9 @@ with tab7:
                     icon=folium.Icon(color='gold', icon='futbol-o', prefix='fa')
                 ).add_to(marker_cluster)
 
-            # Controle de camadas
             folium.LayerControl().add_to(m)
-            Fullscreen().add_to(m)  # botão de tela cheia
+            Fullscreen().add_to(m)
 
-            # Exibir mapa no Streamlit
             st_folium(m, width=1400, height=700, returned_objects=[])
 
             st.caption(f"Mostrando {len(df_plot)} estádios. Clique em um marcador para detalhes.")
