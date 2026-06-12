@@ -6,8 +6,8 @@ Dataset: International football results (1872-2024) + Transfermarkt + Estádios 
 import streamlit as st
 import pandas as pd
 import numpy as np
-import plotly.graph_objects as go
 import plotly.express as px
+import plotly.graph_objects as go
 from pathlib import Path
 
 from elo_engine import (
@@ -668,7 +668,7 @@ with tab6:
 
     ### 🗺️ **Estádios**
     - Estádios com coordenadas geográficas obtidos via Wikidata (SPARQL).
-    - Inclui nome, país, time mandante e liga.
+    - Mapa interativo com busca e filtros.
 
     ### 📂 **Fontes**
     - Partidas internacionais: [Football Results (1872-2024)](https://www.kaggle.com/datasets/martj42/international-football-results-from-1872-to-2017)
@@ -683,7 +683,7 @@ with tab6:
 
 
 # ---------------------------------------------------------------------------
-# TAB 7 — ESTÁDIOS (novo dataset Wikidata)
+# TAB 7 — ESTÁDIOS (MAPA INTERATIVO)
 # ---------------------------------------------------------------------------
 with tab7:
     st.subheader("🗺️ Mapa Mundial de Estádios")
@@ -706,6 +706,11 @@ with tab7:
         df["longitude"] = pd.to_numeric(df["longitude"], errors="coerce")
         df = df.dropna(subset=["latitude", "longitude"])
 
+        # Preencher valores vazios para evitar erros no hover
+        df["team"] = df["team"].fillna("Desconhecido")
+        df["league"] = df["league"].fillna("Desconhecida")
+        df["country"] = df["country"].fillna("Desconhecido")
+
         # Renomear colunas para padronizar com o restante do app
         df = df.rename(columns={
             "stadium": "Stadium",
@@ -721,18 +726,61 @@ with tab7:
     df_stadiums = load_stadiums_data()
 
     if not df_stadiums.empty:
-        st.map(df_stadiums, latitude="Latitude", longitude="Longitude", size=10, zoom=1)
+        # Filtros interativos
+        st.markdown("#### 🔍 Filtros do mapa")
+        col1, col2 = st.columns([1, 2])
+        with col1:
+            pais_mapa = st.selectbox(
+                "País em destaque",
+                ["Todos"] + sorted(df_stadiums["Country"].unique())
+            )
+        with col2:
+            busca = st.text_input("Buscar estádio por nome", "")
+
+        # Aplicar filtros
+        df_plot = df_stadiums.copy()
+        if pais_mapa != "Todos":
+            df_plot = df_plot[df_plot["Country"] == pais_mapa]
+        if busca:
+            df_plot = df_plot[df_plot["Stadium"].str.contains(busca, case=False)]
+
+        # Criar mapa com Plotly scatter_geo
+        fig = px.scatter_geo(
+            df_plot,
+            lat="Latitude",
+            lon="Longitude",
+            hover_name="Stadium",
+            hover_data={
+                "Team": True,
+                "League": True,
+                "Country": True,
+                "Latitude": False,
+                "Longitude": False
+            },
+            color_discrete_sequence=[ACCENT],  # cor dourada única
+            projection="natural earth",
+            title=f"Estádios ({len(df_plot)} de {len(df_stadiums)})"
+        )
+
+        fig.update_traces(marker=dict(size=5, opacity=0.7, line=dict(width=0.5, color='DarkSlateGrey')))
+        fig.update_layout(
+            template=PLOTLY_TEMPLATE,
+            height=600,
+            margin=dict(l=0, r=0, t=40, b=0),
+            showlegend=False
+        )
+        st.plotly_chart(fig, use_container_width=True)
 
         st.markdown("---")
         st.subheader("📋 Explorador de Estádios")
 
         col1, col2 = st.columns(2)
         with col1:
-            paises = sorted(df_stadiums["Country"].dropna().unique())
-            pais_sel = st.selectbox("Filtrar por país", ["Todos"] + paises)
+            paises = sorted(df_stadiums["Country"].unique())
+            pais_sel = st.selectbox("Filtrar por país (tabela)", ["Todos"] + paises)
         with col2:
             if "Team" in df_stadiums.columns:
-                times = sorted(df_stadiums["Team"].dropna().unique())
+                times = sorted(df_stadiums["Team"].unique())
                 time_sel = st.selectbox("Filtrar por time mandante", ["Todos"] + times)
             else:
                 time_sel = "Todos"
