@@ -15,6 +15,10 @@ from elo_engine import (
     compute_elo_history, get_elo_timeseries, predict_match,
     team_attack_defense_strength, poisson_match_probs, INITIAL_ELO
 )
+from club_engine import (
+    load_club_data, valuation_age_curve, top_transfers,
+    transfer_flow_by_league, nationality_distribution, club_summary, COMPETITION_LABELS
+)
 
 # ---------------------------------------------------------------------------
 # CONFIG & THEME
@@ -143,6 +147,14 @@ def load_all_data():
 
 
 DATA = load_all_data()
+
+
+@st.cache_data(show_spinner="Carregando dados de mercado (Transfermarkt)...")
+def load_club_dataset():
+    return load_club_data()
+
+
+CLUB_DATA = load_club_dataset()
 RESULTS = DATA["results"]
 HISTORY = DATA["history"]
 CURRENT_RATINGS = DATA["current_ratings"]
@@ -164,8 +176,9 @@ st.markdown(
     unsafe_allow_html=True
 )
 
-tab1, tab2, tab3, tab4, tab5 = st.tabs([
-    "📊 Elo Ranking & Evolução", "🆚 Head-to-Head", "🎯 Predição Poisson", "🏆 Tournament Analytics", "ℹ️ Metodologia"
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+    "📊 Elo Ranking & Evolução", "🆚 Head-to-Head", "🎯 Predição Poisson",
+    "🏆 Tournament Analytics", "💰 Player Market Intelligence", "ℹ️ Metodologia"
 ])
 
 
@@ -597,9 +610,152 @@ with tab4:
 
 
 # ---------------------------------------------------------------------------
-# TAB 5 — METHODOLOGY
+# TAB 5 — PLAYER MARKET INTELLIGENCE
 # ---------------------------------------------------------------------------
 with tab5:
+    st.subheader("Inteligência de Mercado — Jogadores & Transferências")
+    st.markdown(
+        '<div class="caption-box">Fonte: Transfermarkt (clubes, jogadores, valores de mercado e transferências). '
+        'Cruzamento com o Elo Engine permite conectar o valor de mercado dos clubes às seleções nacionais.</div>',
+        unsafe_allow_html=True
+    )
+
+    PLAYERS = CLUB_DATA["players"]
+    CLUBS = CLUB_DATA["clubs"]
+    TRANSFERS = CLUB_DATA["transfers"]
+    VALUATIONS = CLUB_DATA["valuations"]
+    COMPETITIONS = CLUB_DATA["competitions"]
+
+    # --- Top-level metrics ---
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Jogadores na base", f"{len(PLAYERS):,}".replace(",", "."))
+    m2.metric("Clubes", f"{len(CLUBS):,}".replace(",", "."))
+    m3.metric("Transferências registradas", f"{len(TRANSFERS):,}".replace(",", "."))
+    total_fees = TRANSFERS["transfer_fee"].sum()
+    m4.metric("Volume total negociado", f"€ {total_fees/1e9:.1f} bi")
+
+    st.markdown("---")
+
+    # --- Transfer flow Sankey between leagues ---
+    st.markdown("### 🌍 Fluxo de Transferências entre Ligas")
+    seasons = sorted(TRANSFERS["transfer_season"].dropna().unique(), reverse=True)
+    c1, c2 = st.columns([1, 3])
+    with c1:
+        season_sel = st.selectbox("Temporada", ["Todas"] + list(seasons))
+        min_fee_m = st.slider("Valor mínimo por transferência (€ milhões)", 0.5, 20.0, 2.0, step=0.5)
+
+    flow = transfer_flow_by_league(
+        TRANSFERS, CLUBS,
+        season=None if season_sel == "Todas" else season_sel,
+        top_n=15, min_fee=min_fee_m * 1_000_000
+    )
+
+    with c2:
+        if flow.empty:
+            st.info("Sem fluxos relevantes para os filtros selecionados.")
+        else:
+            leagues = pd.unique(flow[["from_league", "to_league"]].values.ravel())
+            league_idx = {l: i for i, l in enumerate(leagues)}
+            fig = go.Figure(data=[go.Sankey(
+                node=dict(
+                    label=list(leagues),
+                    color=ACCENT,
+                    pad=15, thickness=18,
+                ),
+                link=dict(
+                    source=[league_idx[s] for s in flow["from_league"]],
+                    target=[league_idx[t] for t in flow["to_league"]],
+                    value=flow["transfer_fee"] / 1e6,
+                    color="rgba(212,175,55,0.35)",
+                ),
+            )])
+            fig.update_layout(template=PLOTLY_TEMPLATE, height=450,
+                               title="Maiores Fluxos de Transferência entre Ligas (€ milhões)")
+            st.plotly_chart(fig, use_container_width=True)
+
+    # --- Valuation curve by age/position ---
+    st.markdown("### 📈 Curva de Valorização de Mercado por Idade")
+    c3, c4 = st.columns([1, 3])
+    with c3:
+        position_sel = st.selectbox("Posição", ["Todas", "Attack", "Midfield", "Defender", "Goalkeeper"])
+
+    curve = valuation_age_curve(VALUATIONS, PLAYERS, position_filter=position_sel)
+    with c4:
+        if curve.empty:
+            st.info("Dados insuficientes para esta posição.")
+        else:
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(x=curve["age_bucket"], y=curve["mean"]/1e6, mode="lines+markers",
+                                       name="Valor médio (€ mi)", line=dict(color=ACCENT, width=2)))
+            fig.add_trace(go.Scatter(x=curve["age_bucket"], y=curve["median"]/1e6, mode="lines+markers",
+                                       name="Valor mediano (€ mi)", line=dict(color=ACCENT2, width=2, dash="dot")))
+            peak_age = curve.loc[curve["mean"].idxmax(), "age_bucket"]
+            fig.add_vline(x=peak_age, line_dash="dash", line_color="#999999",
+                          annotation_text=f"Pico ~ {int(peak_age)} anos")
+            fig.update_layout(template=PLOTLY_TEMPLATE, height=400,
+                               xaxis_title="Idade", yaxis_title="Valor de mercado (€ milhões)",
+                               title=f"Valor de Mercado por Idade — {position_sel}")
+            st.plotly_chart(fig, use_container_width=True)
+
+    st.markdown("---")
+
+    # --- Top transfers + nationality + club explorer ---
+    c5, c6 = st.columns(2)
+    with c5:
+        st.markdown("### 💸 Maiores Transferências da História")
+        tt = top_transfers(TRANSFERS, n=15, min_fee=1_000_000)
+        tt_display = tt.copy()
+        tt_display["transfer_fee"] = (tt_display["transfer_fee"] / 1e6).round(1).astype(str) + " M€"
+        tt_display.columns = ["Data", "Jogador", "De", "Para", "Valor", "Temporada"]
+        st.dataframe(tt_display, use_container_width=True, hide_index=True, height=400)
+
+    with c6:
+        st.markdown("### 🌎 Nacionalidade dos Jogadores por Liga")
+        comp_options = ["Todas"] + sorted(PLAYERS["current_club_domestic_competition_id"].dropna().unique().tolist())
+        comp_labels = {c: COMPETITION_LABELS.get(c, c) for c in comp_options}
+        comp_sel = st.selectbox("Liga", comp_options, format_func=lambda x: comp_labels.get(x, x))
+        nat = nationality_distribution(PLAYERS, comp_sel).head(12)
+        fig = px.bar(nat, x="Jogadores", y="País", orientation="h",
+                      title=f"Top Nacionalidades — {comp_labels.get(comp_sel, comp_sel)}")
+        fig.update_traces(marker_color=ACCENT)
+        fig.update_layout(template=PLOTLY_TEMPLATE, height=400, yaxis=dict(autorange="reversed"))
+        st.plotly_chart(fig, use_container_width=True)
+
+    # --- Club explorer ---
+    st.markdown("### 🏟️ Explorador de Clubes")
+    league_options = ["Todas"] + sorted(CLUBS["domestic_competition_id"].dropna().unique().tolist())
+    league_labels = {l: COMPETITION_LABELS.get(l, l) for l in league_options}
+    league_sel = st.selectbox("Filtrar por liga", league_options, format_func=lambda x: league_labels.get(x, x), key="club_league")
+
+    cs = club_summary(CLUBS, PLAYERS, league_sel).sort_values("squad_value_eur", ascending=False).head(20)
+    cs_display = cs.copy()
+    cs_display["squad_value_eur"] = (cs_display["squad_value_eur"] / 1e6).round(1).astype(str) + " M€"
+    cs_display.columns = ["Clube", "Elenco", "Idade Média", "% Estrangeiros", "Jogadores Sel. Nacional",
+                           "Valor do Elenco", "Estádio", "Capacidade"]
+    st.dataframe(cs_display, use_container_width=True, hide_index=True, height=400)
+
+    # --- Bridge: national team players' club value ---
+    st.markdown("### 🔗 Conexão Seleção ↔ Clube")
+    st.caption("Jogadores com mais presenças/gols pela seleção e o valor de mercado atual em seus clubes.")
+    bridge_team = st.selectbox("Seleção", sorted(PLAYERS["country_of_citizenship"].dropna().unique()),
+                                index=0, key="bridge_team")
+    bridge = PLAYERS[PLAYERS["country_of_citizenship"] == bridge_team].copy()
+    bridge = bridge[bridge["international_caps"].notna() & (bridge["international_caps"] > 0)]
+    bridge = bridge.sort_values("international_caps", ascending=False).head(15)
+    if bridge.empty:
+        st.info("Sem dados internacionais suficientes para esta seleção na base.")
+    else:
+        bridge_display = bridge[["name", "current_club_name", "position", "international_caps",
+                                   "international_goals", "market_value_in_eur"]].copy()
+        bridge_display["market_value_in_eur"] = (bridge_display["market_value_in_eur"] / 1e6).round(1).astype(str) + " M€"
+        bridge_display.columns = ["Jogador", "Clube Atual", "Posição", "Jogos pela Seleção", "Gols pela Seleção", "Valor de Mercado"]
+        st.dataframe(bridge_display, use_container_width=True, hide_index=True)
+
+
+# ---------------------------------------------------------------------------
+# TAB 6 — METHODOLOGY
+# ---------------------------------------------------------------------------
+with tab6:
     st.subheader("Metodologia")
     st.markdown("""
 **Fonte de dados**: International football results, 1872 a 2024 (results, goalscorers, shootouts, former_names).
@@ -622,6 +778,13 @@ with tab5:
 - O modelo não captura lesões, escalações, condições de jogo ou contexto situacional (jogo decisivo, dérbi etc.).
 - Seleções com poucos jogos recentes (<5 no período de 10 anos) não entram no modelo Poisson.
 - Indicado para fins analíticos e exploratórios, não como recomendação de apostas.
+**Player Market Intelligence (Transfermarkt)**
+- Base de clubes, jogadores, valores de mercado históricos (507k registros) e transferências (40k registros).
+- Fluxo de transferências entre ligas calculado a partir do mapeamento clube → competição doméstica.
+- Curva de valorização por idade agrega valores de mercado históricos por faixa etária (mínimo 10 observações por idade).
+- "Conexão Seleção ↔ Clube" usa `international_caps`/`international_goals` registrados no Transfermarkt, que podem
+  divergir levemente da base de seleções (results.csv) por critérios de contagem distintos entre fontes.
+
 **Roadmap**
 - Integração futura de dataset de jogadores (estatísticas individuais, clubes, posições) para enriquecer
   a aba de Artilheiros e permitir análises cross-seleção/clube.
