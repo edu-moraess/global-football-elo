@@ -425,7 +425,7 @@ with tab1:
         
         # CORREÇÃO AQUI: Ffill e Bfill nativos (Pandas >= 2.0)
         heat_pivot = heat_pivot.ffill(axis=1).bfill(axis=1).fillna(INITIAL_ELO)
-        
+  
         heat_pivot = heat_pivot.reindex(ranking_df.head(n_heat)["Seleção"].tolist())
         fig_heat = go.Figure(data=go.Heatmap(
             z=heat_pivot.values,
