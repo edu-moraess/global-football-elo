@@ -40,14 +40,16 @@ ACCENT2 = "#1f77b4"
 POSITIVE = "#2ca02c"
 NEGATIVE = "#d62728"
 
+# Template claro e minimalista (Clean White)
 PLOTLY_TEMPLATE = dict(
     layout=go.Layout(
-        paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(0,0,0,0)",
-        font=dict(family="IBM Plex Mono, monospace", size=12),
+        template="plotly_white",
+        paper_bgcolor="#ffffff",
+        plot_bgcolor="#ffffff",
+        font=dict(family="IBM Plex Mono, monospace", size=12, color="#111111"),
         colorway=[ACCENT, ACCENT2, "#f72585", "#4ade80", "#fb923c", "#a78bfa"],
         margin=dict(l=40, r=20, t=50, b=40),
-        legend=dict(bgcolor="rgba(0,0,0,0)"),
+        legend=dict(bgcolor="rgba(255,255,255,0.9)"),
     )
 )
 
@@ -102,12 +104,12 @@ def form_pills_html(results_df, team, n=5):
         gf = r["home_score"] if is_home else r["away_score"]
         ga = r["away_score"] if is_home else r["home_score"]
         if gf > ga:
-            cls, letter = "form-w", "V"
+            cls, letter = "V"
         elif gf < ga:
-            cls, letter = "form-l", "D"
+            cls, letter = "D"
         else:
-            cls, letter = "form-d", "E"
-        html += f'<span class="form-pill {cls}">{letter}</span>'
+            cls, letter = "E"
+        html += f'<span class="form-pill form-{cls.lower()}">{letter}</span>'
     return html if html else "<i>sem jogos recentes</i>"
 
 
@@ -195,29 +197,29 @@ tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
 
 
 # ---------------------------------------------------------------------------
-# TAB 1 — ELO RANKING & EVOLUÇÃO (CORRIGIDA - SEM KeyError)
+# TAB 1 — ELO RANKING & EVOLUÇÃO
 # ---------------------------------------------------------------------------
 with tab1:
     st.subheader("📊 Ranking e Métricas Avançadas")
 
+    # Preparar dados de ranking com métricas adicionais
     cutoff_12m = HISTORY["date"].max() - pd.DateOffset(months=12)
     recent_12m = HISTORY[HISTORY["date"] >= cutoff_12m]
     
     ranking_data = []
     for team in ALL_TEAMS:
         elo_atual = CURRENT_RATINGS[team]
+        
         ts = HISTORY[HISTORY["team"] == team].sort_values("date")
         if len(ts) >= 2:
             ts_before = ts[ts["date"] <= cutoff_12m]
-            if not ts_before.empty:
-                elo_12m = ts_before["elo"].iloc[-1]
-            else:
-                elo_12m = elo_atual
+            elo_12m = ts_before["elo"].iloc[-1] if not ts_before.empty else elo_atual
         else:
             elo_12m = elo_atual
+            
         delta_12m = elo_atual - elo_12m
-        
         team_strength = STRENGTH.get(team, {})
+        
         if isinstance(team_strength, dict):
             atk = team_strength.get("attack", 1.0)
             defense = team_strength.get("defense", 1.0)
@@ -225,6 +227,7 @@ with tab1:
             atk, defense = 1.0, 1.0
         
         jogos_12m = len(recent_12m[recent_12m["team"] == team])
+        
         ranking_data.append({
             "Seleção": team,
             "Elo": round(elo_atual, 1),
@@ -235,13 +238,29 @@ with tab1:
             "Tier": elo_tier(elo_atual)[0]
         })
     
-    ranking_df = pd.DataFrame(ranking_data).sort_values("Elo", ascending=False).reset_index(drop=True)
-    # Calcular ΔPos usando o índice (rank = índice + 1)
-    ranking_df["ΔPos"] = ((ranking_df.index + 1) + (ranking_df["Δ12m"] / 5).round().astype(int)) - (ranking_df.index + 1)
-    ranking_df["ΔPos"] = ranking_df["ΔPos"].clip(-20, 20)
-    # Adicionar coluna Rank visível (opcional, mas útil)
-    ranking_df.insert(0, "Rank", ranking_df.index + 1)
+    ranking_df = pd.DataFrame(ranking_data)
     
+    if not ranking_df.empty:
+        ranking_df = ranking_df.sort_values("Elo", ascending=False).reset_index(drop=True)
+        
+        # Atribuição explícita do Rank para evitar o KeyError
+        ranking_df["Rank"] = range(1, len(ranking_df) + 1)
+        
+        # Tratamento seguro contra NaNs antes da conversão para int
+        ranking_df["Δ12m"] = ranking_df["Δ12m"].fillna(0)
+        
+        ranking_df["PosAnterior"] = ranking_df["Rank"] + (ranking_df["Δ12m"] / 5).round().astype(int)
+        ranking_df["ΔPos"] = ranking_df["PosAnterior"] - ranking_df["Rank"]
+        ranking_df["ΔPos"] = ranking_df["ΔPos"].clip(-20, 20)
+        
+        # Reordenando as colunas de forma limpa
+        cols_order = ["Rank", "Seleção", "Elo", "Δ12m", "ΔPos", "Ataque", "Defesa", "Jogos (12m)", "Tier"]
+        ranking_df = ranking_df[cols_order]
+    else:
+        # Fallback de segurança
+        ranking_df = pd.DataFrame(columns=["Rank", "Seleção", "Elo", "Δ12m", "ΔPos", "Ataque", "Defesa", "Jogos (12m)", "Tier"])
+    
+    # --- Layout com colunas ---
     col_left, col_right = st.columns([1.2, 1.8])
     
     with col_left:
@@ -263,7 +282,6 @@ with tab1:
                 "Ataque": st.column_config.NumberColumn("Força Ofensiva", format="%.2f"),
                 "Defesa": st.column_config.NumberColumn("Força Defensiva", format="%.2f"),
                 "Jogos (12m)": st.column_config.Column("Jogos", help="Partidas nos últimos 12 meses"),
-                "Tier": st.column_config.Column("Tier"),
             }
         )
         
@@ -307,7 +325,7 @@ with tab1:
     
     st.markdown("---")
     
-    # --- Evolução histórica com controle de período e suavização ---
+    # --- Evolução histórica ---
     st.subheader("📅 Evolução Histórica do Elo")
     col_ts1, col_ts2 = st.columns([1, 1])
     with col_ts1:
@@ -344,7 +362,6 @@ with tab1:
     else:
         st.info("Selecione ao menos uma seleção para visualizar a evolução.")
     
-    # --- Comparação de eras (seleção vs seu próprio histórico) ---
     st.markdown("---")
     st.subheader("⏳ Comparação com o Passado da Seleção")
     col_era1, col_era2 = st.columns([1, 2])
@@ -373,7 +390,6 @@ with tab1:
         else:
             st.info("Sem dados históricos suficientes.")
     
-    # --- Média de Elo por década (top 10) ---
     st.markdown("---")
     st.subheader("📅 Média de Elo por Década (Top 10)")
     HISTORY_copy = HISTORY.copy()
@@ -389,7 +405,6 @@ with tab1:
     fig_decade.update_layout(template=PLOTLY_TEMPLATE, height=400)
     st.plotly_chart(fig_decade, use_container_width=True)
     
-    # --- Heatmap de evolução (opcional) ---
     with st.expander("🔥 Mapa de Calor da Evolução (seleções vs tempo)", expanded=False):
         st.caption("Exibe a variação de Elo ao longo dos anos para as principais seleções. Pode demorar um pouco.")
         n_heat = st.slider("Número de seleções no heatmap", 10, 50, 25)
@@ -413,7 +428,6 @@ with tab1:
                                xaxis_title="Ano", yaxis_title="Seleção")
         st.plotly_chart(fig_heat, use_container_width=True)
     
-    # --- Botão de exportação ---
     st.markdown("---")
     csv_ranking = ranking_df.to_csv(index=False).encode('utf-8')
     st.download_button("📥 Baixar ranking atual (CSV)", data=csv_ranking, file_name="elo_ranking.csv", mime="text/csv")
@@ -592,7 +606,7 @@ with tab3:
         sm = result["score_matrix"][:max_g+1, :max_g+1]
         heat = go.Figure(data=go.Heatmap(
             z=sm, x=[str(i) for i in range(max_g+1)], y=[str(i) for i in range(max_g+1)],
-            colorscale="YlOrRd",
+            colorscale="Blues",
             text=np.round(sm*100, 1), texttemplate="%{text}%",
             hoverongaps=False,
         ))
@@ -661,6 +675,7 @@ with tab4:
             lambda x: x["home_score"].sum() + x["away_score"].sum()
         ).reset_index(name="gols")
         fig = px.line(gols_por_ano, x="year", y="gols", title="Evolução de gols por ano")
+        fig.update_layout(template=PLOTLY_TEMPLATE)
         st.plotly_chart(fig, use_container_width=True)
 
 
@@ -833,8 +848,7 @@ with tab6:
     - Processamento e visualização: **Python, Pandas, Plotly, Streamlit, Folium**.
 
     ---
-    **Desenvolvido por Eduardo Moraes**  
-    [GitHub](https://github.com/edu-moraess/global-football-elo)
+    **Desenvolvido por Eduardo Moraes** [GitHub](https://github.com/edu-moraess/global-football-elo)
     """)
 
 
@@ -928,16 +942,11 @@ with tab7:
                 attr='OpenStreetMap contributors'
             )
 
+            # Alterado para cartodb positron visando mapa claro minimalista
             folium.TileLayer(
-                tiles='CartoDB dark_matter',
-                name='Escuro',
+                tiles='CartoDB positron',
+                name='Claro Minimalista',
                 attr='CartoDB'
-            ).add_to(m)
-
-            folium.TileLayer(
-                tiles='Stamen Terrain',
-                name='Terreno',
-                attr='Map tiles by Stamen Design, under CC BY 3.0. Data by OpenStreetMap, under ODbL.'
             ).add_to(m)
 
             folium.TileLayer(
@@ -959,7 +968,7 @@ with tab7:
                 folium.Marker(
                     location=[row["Latitude"], row["Longitude"]],
                     popup=folium.Popup(popup_html, max_width=300),
-                    icon=folium.Icon(color='gold', icon='futbol-o', prefix='fa')
+                    icon=folium.Icon(color='blue', icon='futbol-o', prefix='fa') # Icone reajustado para melhorar visualização com mapa claro
                 ).add_to(marker_cluster)
 
             folium.LayerControl().add_to(m)
