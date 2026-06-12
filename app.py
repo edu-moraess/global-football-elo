@@ -107,12 +107,12 @@ def form_pills_html(results_df, team, n=5):
         gf = r["home_score"] if is_home else r["away_score"]
         ga = r["away_score"] if is_home else r["home_score"]
         if gf > ga:
-            cls, letter = "V"
+            cls, letter = "w", "V"
         elif gf < ga:
-            cls, letter = "D"
+            cls, letter = "l", "D"
         else:
-            cls, letter = "E"
-        html += f'<span class="form-pill form-{cls.lower()}">{letter}</span>'
+            cls, letter = "d", "E"
+        html += f'<span class="form-pill form-{cls}">{letter}</span>'
     return html if html else "<i>sem jogos recentes</i>"
 
 
@@ -200,7 +200,7 @@ tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
 
 
 # ---------------------------------------------------------------------------
-# TAB 1 — ELO RANKING & EVOLUÇÃO
+# TAB 1 — ELO RANKING & EVOLUÇÃO (REORGANIZADO)
 # ---------------------------------------------------------------------------
 with tab1:
     st.subheader("📊 Ranking e Métricas Avançadas")
@@ -208,29 +208,24 @@ with tab1:
     # Preparar dados de ranking com métricas adicionais
     cutoff_12m = HISTORY["date"].max() - pd.DateOffset(months=12)
     recent_12m = HISTORY[HISTORY["date"] >= cutoff_12m]
-    
+
     ranking_data = []
     for team in ALL_TEAMS:
         elo_atual = CURRENT_RATINGS[team]
-        
         ts = HISTORY[HISTORY["team"] == team].sort_values("date")
         if len(ts) >= 2:
             ts_before = ts[ts["date"] <= cutoff_12m]
             elo_12m = ts_before["elo"].iloc[-1] if not ts_before.empty else elo_atual
         else:
             elo_12m = elo_atual
-            
         delta_12m = elo_atual - elo_12m
         team_strength = STRENGTH.get(team, {})
-        
         if isinstance(team_strength, dict):
             atk = team_strength.get("attack", 1.0)
             defense = team_strength.get("defense", 1.0)
         else:
             atk, defense = 1.0, 1.0
-        
         jogos_12m = len(recent_12m[recent_12m["team"] == team])
-        
         ranking_data.append({
             "Seleção": team,
             "Elo": round(elo_atual, 1),
@@ -240,9 +235,8 @@ with tab1:
             "Jogos (12m)": jogos_12m,
             "Tier": elo_tier(elo_atual)[0]
         })
-    
+
     ranking_df = pd.DataFrame(ranking_data)
-    
     if not ranking_df.empty:
         ranking_df = ranking_df.sort_values("Elo", ascending=False).reset_index(drop=True)
         ranking_df["Rank"] = range(1, len(ranking_df) + 1)
@@ -250,28 +244,24 @@ with tab1:
         ranking_df["PosAnterior"] = ranking_df["Rank"] + (ranking_df["Δ12m"] / 5).round().astype(int)
         ranking_df["ΔPos"] = ranking_df["PosAnterior"] - ranking_df["Rank"]
         ranking_df["ΔPos"] = ranking_df["ΔPos"].clip(-20, 20)
-        
         cols_order = ["Rank", "Seleção", "Elo", "Δ12m", "ΔPos", "Ataque", "Defesa", "Jogos (12m)", "Tier"]
         ranking_df = ranking_df[cols_order]
     else:
         ranking_df = pd.DataFrame(columns=["Rank", "Seleção", "Elo", "Δ12m", "ΔPos", "Ataque", "Defesa", "Jogos (12m)", "Tier"])
-    
-    # --- Layout com colunas (proporções ajustadas) ---
-    col_left, col_right = st.columns([1.1, 1.9], gap="large")
-    
-    with col_left:
+
+    # --- Layout com duas colunas: Ranking + Simulador ---
+    col_rank, col_sim = st.columns([1.4, 1], gap="large")
+    with col_rank:
         st.markdown("#### 🏆 Ranking Elo Atual")
         top_n = st.slider("Top N seleções", 5, 50, 20, key="top_n_elo")
         search_team = st.text_input("🔍 Buscar seleção", placeholder="Digite o nome...")
         df_display = ranking_df.copy()
         if search_team:
             df_display = df_display[df_display["Seleção"].str.contains(search_team, case=False)]
-        
-        # Altura ajustada para 660 preenchendo o espaço equivalente aos gráficos da direita
         st.dataframe(
             df_display.head(top_n) if not search_team else df_display,
             use_container_width=True,
-            height=660,
+            height=520,
             column_config={
                 "Rank": st.column_config.NumberColumn("Rank", format="%d"),
                 "Elo": st.column_config.ProgressColumn("Elo", min_value=1300, max_value=2100, format="%.0f"),
@@ -282,41 +272,43 @@ with tab1:
                 "Jogos (12m)": st.column_config.Column("Jogos", help="Partidas nos últimos 12 meses"),
             }
         )
-        
-        # Envelopando o simulador para criar um visual de card fechado
+
+    with col_sim:
         with st.container(border=True):
-            st.markdown("#### 📈 Simulador de Confronto (via Elo)")
+            st.markdown("#### 📈 Simulador de Confronto (Elo)")
             sim_home = st.selectbox("Seleção da casa", ALL_TEAMS, index=ALL_TEAMS.index("Brazil") if "Brazil" in ALL_TEAMS else 0, key="sim_home")
             sim_away = st.selectbox("Seleção visitante", ALL_TEAMS, index=ALL_TEAMS.index("Argentina") if "Argentina" in ALL_TEAMS else 1, key="sim_away")
             neutral_sim = st.checkbox("Campo neutro", value=True, key="neutral_sim")
-            
             if sim_home != sim_away:
                 elo_h = CURRENT_RATINGS.get(sim_home, INITIAL_ELO)
                 elo_a = CURRENT_RATINGS.get(sim_away, INITIAL_ELO)
                 p_h, p_a = predict_match(elo_h, elo_a, neutral=neutral_sim)
-                
-                # Exibindo em colunas
                 m_h, m_e, m_a = st.columns(3)
                 m_h.metric(f"{sim_home}", f"{p_h*100:.1f}%")
                 m_e.metric("Empate", f"{(1-p_h-p_a)*100:.1f}%")
                 m_a.metric(f"{sim_away}", f"{p_a*100:.1f}%")
             else:
                 st.warning("Selecione seleções diferentes.")
-    
-    with col_right:
+
+    st.markdown("---")
+
+    # --- Distribuição de Elo e Variação (duas colunas) ---
+    col_hist, col_var = st.columns([1, 1], gap="large")
+    with col_hist:
         st.markdown("#### 📊 Distribuição de Elo")
-        fig_hist = px.histogram(ranking_df, x="Elo", nbins=30, 
+        fig_hist = px.histogram(ranking_df, x="Elo", nbins=30,
                                 color_discrete_sequence=[ACCENT],
                                 marginal="box", title="Frequência de Ratings")
-        fig_hist.update_layout(template=PLOTLY_TEMPLATE, height=350, margin=dict(t=40, b=10))
+        fig_hist.update_layout(template=PLOTLY_TEMPLATE, height=380, margin=dict(t=40, b=10))
         st.plotly_chart(fig_hist, use_container_width=True)
-        
+
+    with col_var:
         st.markdown("#### 📉 Maiores Altas e Quedas (últimos 12 meses)")
-        col_up, col_down = st.columns(2)
         top_risers = ranking_df.nlargest(8, "Δ12m")[["Seleção", "Δ12m"]]
         top_fallers = ranking_df.nsmallest(8, "Δ12m")[["Seleção", "Δ12m"]]
+        col_up, col_down = st.columns(2)
         with col_up:
-            fig_up = px.bar(top_risers, x="Δ12m", y="Seleção", orientation="h", 
+            fig_up = px.bar(top_risers, x="Δ12m", y="Seleção", orientation="h",
                             title="Em ascensão", color="Δ12m", color_continuous_scale="Greens")
             fig_up.update_layout(template=PLOTLY_TEMPLATE, height=300, showlegend=False, margin=dict(t=30, b=10))
             st.plotly_chart(fig_up, use_container_width=True)
@@ -325,12 +317,11 @@ with tab1:
                               title="Em queda", color="Δ12m", color_continuous_scale="Reds")
             fig_down.update_layout(template=PLOTLY_TEMPLATE, height=300, showlegend=False, margin=dict(t=30, b=10))
             st.plotly_chart(fig_down, use_container_width=True)
-    
+
     st.markdown("---")
-    
-    # --- Evolução histórica ---
+
+    # --- Evolução histórica (gráfico de linha) ---
     st.subheader("📅 Evolução Histórica do Elo")
-    
     with st.container(border=True):
         col_ts1, col_ts2 = st.columns([1, 1])
         with col_ts1:
@@ -345,7 +336,7 @@ with tab1:
             start_date = HISTORY["date"].min().date()
             end_date = HISTORY["date"].max().date()
             date_range = st.slider("Período", min_value=start_date, max_value=end_date, value=(start_date, end_date))
-    
+
     if selected_teams_ts:
         fig_ts = go.Figure()
         for team in selected_teams_ts:
@@ -366,14 +357,14 @@ with tab1:
         st.plotly_chart(fig_ts, use_container_width=True)
     else:
         st.info("Selecione ao menos uma seleção para visualizar a evolução.")
-    
+
     st.markdown("---")
-    
-    col_era1, col_era2 = st.columns([1, 2], gap="large")
+
+    # --- Comparações históricas + Média por década (duas colunas) ---
+    col_era1, col_era2 = st.columns([1, 1.2], gap="large")
     with col_era1:
         st.subheader("⏳ Comparações Históricas")
         team_era = st.selectbox("Escolha uma seleção", ALL_TEAMS, key="team_era")
-        
         hist_team = HISTORY[HISTORY["team"] == team_era].sort_values("date")
         if not hist_team.empty:
             with st.container(border=True):
@@ -382,23 +373,21 @@ with tab1:
                 current_elo = CURRENT_RATINGS[team_era]
                 max_date = hist_team[hist_team["elo"] == max_elo]["date"].iloc[0].strftime("%Y-%m")
                 min_date = hist_team[hist_team["elo"] == min_elo]["date"].iloc[0].strftime("%Y-%m")
-                
                 st.metric("Elo Atual", f"{current_elo:.0f}")
                 st.metric("Pico Histórico", f"{max_elo:.0f} ({max_date})")
                 st.metric("Mínimo Histórico", f"{min_elo:.0f} ({min_date})")
-                
             compare_df = pd.DataFrame({
                 "Métrica": ["Atual", "Pico", "Mínimo"],
                 "Elo": [current_elo, max_elo, min_elo]
             })
-            fig_comp = px.bar(compare_df, x="Métrica", y="Elo", color="Métrica", 
+            fig_comp = px.bar(compare_df, x="Métrica", y="Elo", color="Métrica",
                               color_discrete_sequence=[ACCENT, POSITIVE, NEGATIVE],
                               title=f"Desempenho: {team_era}")
             fig_comp.update_layout(template=PLOTLY_TEMPLATE, height=300, showlegend=False, margin=dict(t=30, b=10))
             st.plotly_chart(fig_comp, use_container_width=True)
         else:
             st.info("Sem dados históricos suficientes.")
-            
+
     with col_era2:
         st.subheader("📅 Média de Elo por Década (Top 10)")
         HISTORY_copy = HISTORY.copy()
@@ -413,19 +402,17 @@ with tab1:
                             title=f"Top 10 seleções na década de {int(selected_decade)}")
         fig_decade.update_layout(template=PLOTLY_TEMPLATE, height=500, margin=dict(t=40, b=10))
         st.plotly_chart(fig_decade, use_container_width=True)
-    
+
+    # --- Heatmap (expansível) ---
     with st.expander("🔥 Mapa de Calor da Evolução (seleções vs tempo)", expanded=False):
         st.caption("Exibe a variação de Elo ao longo dos anos para as principais seleções. Pode demorar um pouco.")
-        n_heat = st.slider("Número de seleções no heatmap", 10, 50, 25)
+        n_heat = st.slider("Número de seleções no heatmap", 10, 50, 25, key="n_heat")
         top_teams_heat = ranking_df.head(n_heat)["Seleção"].tolist()
         history_heat = HISTORY[HISTORY["team"].isin(top_teams_heat)].copy()
         history_heat["year"] = history_heat["date"].dt.year
         heat_pivot = history_heat.groupby(["year", "team"])["elo"].mean().reset_index()
         heat_pivot = heat_pivot.pivot(index="team", columns="year", values="elo")
-        
-        # CORREÇÃO AQUI: Ffill e Bfill nativos (Pandas >= 2.0)
         heat_pivot = heat_pivot.ffill(axis=1).bfill(axis=1).fillna(INITIAL_ELO)
-  
         heat_pivot = heat_pivot.reindex(ranking_df.head(n_heat)["Seleção"].tolist())
         fig_heat = go.Figure(data=go.Heatmap(
             z=heat_pivot.values,
@@ -439,8 +426,8 @@ with tab1:
                                title="Evolução do Rating Elo por Seleção (média anual)",
                                xaxis_title="Ano", yaxis_title="Seleção")
         st.plotly_chart(fig_heat, use_container_width=True)
-    
-    st.markdown("---")
+
+    # --- Download do ranking ---
     csv_ranking = ranking_df.to_csv(index=False).encode('utf-8')
     st.download_button("📥 Baixar ranking atual (CSV)", data=csv_ranking, file_name="elo_ranking.csv", mime="text/csv")
 
