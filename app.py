@@ -111,7 +111,7 @@ def form_pills_html(results_df, team, n=5):
         elif gf < ga:
             cls, letter = "l", "D"
         else:
-            cls, letter = "d", "E"
+            cls, letter = "d", "E"   # 🔧 CORREÇÃO AQUI
         html += f'<span class="form-pill form-{cls}">{letter}</span>'
     return html if html else "<i>sem jogos recentes</i>"
 
