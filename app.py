@@ -55,12 +55,15 @@ PLOTLY_TEMPLATE = dict(
 
 st.markdown(f"""
 <style>
+/* Otimização de margens do layout */
+.block-container {{ padding-top: 2rem; padding-bottom: 2rem; padding-left: 3rem; padding-right: 3rem; }}
+[data-testid="stMetric"] {{ padding-bottom: 0px; }}
+
 h1, h2, h3 {{ font-family: 'IBM Plex Mono', monospace; letter-spacing: 0.5px; }}
 h1 {{ color: {ACCENT} !important; border-bottom: 2px solid {ACCENT}; padding-bottom: 12px; }}
 [data-testid="stMetricValue"] {{ font-family: 'IBM Plex Mono', monospace; }}
 .stTabs [data-baseweb="tab"] {{ font-family: 'IBM Plex Mono', monospace; font-size: 0.95rem; }}
 .stTabs [aria-selected="true"] {{ color: {ACCENT} !important; border-bottom-color: {ACCENT} !important; }}
-.block-container {{ padding-top: 1.5rem; }}
 .caption-box {{
     border-left: 3px solid {ACCENT};
     padding: 0.6rem 1rem; font-size: 0.85rem; opacity: 0.85;
@@ -242,26 +245,19 @@ with tab1:
     
     if not ranking_df.empty:
         ranking_df = ranking_df.sort_values("Elo", ascending=False).reset_index(drop=True)
-        
-        # Atribuição explícita do Rank para evitar o KeyError
         ranking_df["Rank"] = range(1, len(ranking_df) + 1)
-        
-        # Tratamento seguro contra NaNs antes da conversão para int
         ranking_df["Δ12m"] = ranking_df["Δ12m"].fillna(0)
-        
         ranking_df["PosAnterior"] = ranking_df["Rank"] + (ranking_df["Δ12m"] / 5).round().astype(int)
         ranking_df["ΔPos"] = ranking_df["PosAnterior"] - ranking_df["Rank"]
         ranking_df["ΔPos"] = ranking_df["ΔPos"].clip(-20, 20)
         
-        # Reordenando as colunas de forma limpa
         cols_order = ["Rank", "Seleção", "Elo", "Δ12m", "ΔPos", "Ataque", "Defesa", "Jogos (12m)", "Tier"]
         ranking_df = ranking_df[cols_order]
     else:
-        # Fallback de segurança
         ranking_df = pd.DataFrame(columns=["Rank", "Seleção", "Elo", "Δ12m", "ΔPos", "Ataque", "Defesa", "Jogos (12m)", "Tier"])
     
-    # --- Layout com colunas ---
-    col_left, col_right = st.columns([1.2, 1.8])
+    # --- Layout com colunas (proporções ajustadas) ---
+    col_left, col_right = st.columns([1.1, 1.9], gap="large")
     
     with col_left:
         st.markdown("#### 🏆 Ranking Elo Atual")
@@ -270,10 +266,12 @@ with tab1:
         df_display = ranking_df.copy()
         if search_team:
             df_display = df_display[df_display["Seleção"].str.contains(search_team, case=False)]
+        
+        # Altura ajustada para 660 preenchendo o espaço equivalente aos gráficos da direita
         st.dataframe(
             df_display.head(top_n) if not search_team else df_display,
             use_container_width=True,
-            height=500,
+            height=660,
             column_config={
                 "Rank": st.column_config.NumberColumn("Rank", format="%d"),
                 "Elo": st.column_config.ProgressColumn("Elo", min_value=1300, max_value=2100, format="%.0f"),
@@ -285,27 +283,32 @@ with tab1:
             }
         )
         
-        st.markdown("---")
-        st.markdown("#### 📈 Simulador de Confronto (via Elo)")
-        sim_home = st.selectbox("Seleção da casa", ALL_TEAMS, index=ALL_TEAMS.index("Brazil") if "Brazil" in ALL_TEAMS else 0, key="sim_home")
-        sim_away = st.selectbox("Seleção visitante", ALL_TEAMS, index=ALL_TEAMS.index("Argentina") if "Argentina" in ALL_TEAMS else 1, key="sim_away")
-        neutral_sim = st.checkbox("Campo neutro", value=True, key="neutral_sim")
-        if sim_home != sim_away:
-            elo_h = CURRENT_RATINGS.get(sim_home, INITIAL_ELO)
-            elo_a = CURRENT_RATINGS.get(sim_away, INITIAL_ELO)
-            p_h, p_a = predict_match(elo_h, elo_a, neutral=neutral_sim)
-            st.metric(f"{sim_home} vence", f"{p_h*100:.1f}%")
-            st.metric(f"{sim_away} vence", f"{p_a*100:.1f}%")
-            st.caption(f"Empate: {(1-p_h-p_a)*100:.1f}%")
-        else:
-            st.warning("Selecione seleções diferentes.")
+        # Envelopando o simulador para criar um visual de card fechado
+        with st.container(border=True):
+            st.markdown("#### 📈 Simulador de Confronto (via Elo)")
+            sim_home = st.selectbox("Seleção da casa", ALL_TEAMS, index=ALL_TEAMS.index("Brazil") if "Brazil" in ALL_TEAMS else 0, key="sim_home")
+            sim_away = st.selectbox("Seleção visitante", ALL_TEAMS, index=ALL_TEAMS.index("Argentina") if "Argentina" in ALL_TEAMS else 1, key="sim_away")
+            neutral_sim = st.checkbox("Campo neutro", value=True, key="neutral_sim")
+            
+            if sim_home != sim_away:
+                elo_h = CURRENT_RATINGS.get(sim_home, INITIAL_ELO)
+                elo_a = CURRENT_RATINGS.get(sim_away, INITIAL_ELO)
+                p_h, p_a = predict_match(elo_h, elo_a, neutral=neutral_sim)
+                
+                # Exibindo em colunas
+                m_h, m_e, m_a = st.columns(3)
+                m_h.metric(f"{sim_home}", f"{p_h*100:.1f}%")
+                m_e.metric("Empate", f"{(1-p_h-p_a)*100:.1f}%")
+                m_a.metric(f"{sim_away}", f"{p_a*100:.1f}%")
+            else:
+                st.warning("Selecione seleções diferentes.")
     
     with col_right:
         st.markdown("#### 📊 Distribuição de Elo")
         fig_hist = px.histogram(ranking_df, x="Elo", nbins=30, 
                                 color_discrete_sequence=[ACCENT],
                                 marginal="box", title="Frequência de Ratings")
-        fig_hist.update_layout(template=PLOTLY_TEMPLATE, height=350)
+        fig_hist.update_layout(template=PLOTLY_TEMPLATE, height=350, margin=dict(t=40, b=10))
         st.plotly_chart(fig_hist, use_container_width=True)
         
         st.markdown("#### 📉 Maiores Altas e Quedas (últimos 12 meses)")
@@ -315,31 +318,33 @@ with tab1:
         with col_up:
             fig_up = px.bar(top_risers, x="Δ12m", y="Seleção", orientation="h", 
                             title="Em ascensão", color="Δ12m", color_continuous_scale="Greens")
-            fig_up.update_layout(template=PLOTLY_TEMPLATE, height=300, showlegend=False)
+            fig_up.update_layout(template=PLOTLY_TEMPLATE, height=300, showlegend=False, margin=dict(t=30, b=10))
             st.plotly_chart(fig_up, use_container_width=True)
         with col_down:
             fig_down = px.bar(top_fallers, x="Δ12m", y="Seleção", orientation="h",
                               title="Em queda", color="Δ12m", color_continuous_scale="Reds")
-            fig_down.update_layout(template=PLOTLY_TEMPLATE, height=300, showlegend=False)
+            fig_down.update_layout(template=PLOTLY_TEMPLATE, height=300, showlegend=False, margin=dict(t=30, b=10))
             st.plotly_chart(fig_down, use_container_width=True)
     
     st.markdown("---")
     
     # --- Evolução histórica ---
     st.subheader("📅 Evolução Histórica do Elo")
-    col_ts1, col_ts2 = st.columns([1, 1])
-    with col_ts1:
-        selected_teams_ts = st.multiselect(
-            "Selecione seleções para comparar",
-            ALL_TEAMS,
-            default=["Brazil", "Germany", "Argentina"] if "Brazil" in ALL_TEAMS else ALL_TEAMS[:3],
-            key="ts_teams"
-        )
-    with col_ts2:
-        smooth_window = st.slider("Suavização (média móvel em jogos)", 1, 20, 5, help="Média móvel para suavizar a curva")
-        start_date = HISTORY["date"].min().date()
-        end_date = HISTORY["date"].max().date()
-        date_range = st.slider("Período", min_value=start_date, max_value=end_date, value=(start_date, end_date))
+    
+    with st.container(border=True):
+        col_ts1, col_ts2 = st.columns([1, 1])
+        with col_ts1:
+            selected_teams_ts = st.multiselect(
+                "Selecione seleções para comparar",
+                ALL_TEAMS,
+                default=["Brazil", "Germany", "Argentina"] if "Brazil" in ALL_TEAMS else ALL_TEAMS[:3],
+                key="ts_teams"
+            )
+        with col_ts2:
+            smooth_window = st.slider("Suavização (média móvel em jogos)", 1, 20, 5, help="Média móvel para suavizar a curva")
+            start_date = HISTORY["date"].min().date()
+            end_date = HISTORY["date"].max().date()
+            date_range = st.slider("Período", min_value=start_date, max_value=end_date, value=(start_date, end_date))
     
     if selected_teams_ts:
         fig_ts = go.Figure()
@@ -363,47 +368,51 @@ with tab1:
         st.info("Selecione ao menos uma seleção para visualizar a evolução.")
     
     st.markdown("---")
-    st.subheader("⏳ Comparação com o Passado da Seleção")
-    col_era1, col_era2 = st.columns([1, 2])
+    
+    col_era1, col_era2 = st.columns([1, 2], gap="large")
     with col_era1:
+        st.subheader("⏳ Comparações Históricas")
         team_era = st.selectbox("Escolha uma seleção", ALL_TEAMS, key="team_era")
-    with col_era2:
+        
         hist_team = HISTORY[HISTORY["team"] == team_era].sort_values("date")
         if not hist_team.empty:
-            max_elo = hist_team["elo"].max()
-            min_elo = hist_team["elo"].min()
-            current_elo = CURRENT_RATINGS[team_era]
-            max_date = hist_team[hist_team["elo"] == max_elo]["date"].iloc[0].strftime("%Y-%m")
-            min_date = hist_team[hist_team["elo"] == min_elo]["date"].iloc[0].strftime("%Y-%m")
-            st.metric("Elo Atual", f"{current_elo:.0f}")
-            st.metric("Pico Histórico", f"{max_elo:.0f} ({max_date})")
-            st.metric("Mínimo Histórico", f"{min_elo:.0f} ({min_date})")
+            with st.container(border=True):
+                max_elo = hist_team["elo"].max()
+                min_elo = hist_team["elo"].min()
+                current_elo = CURRENT_RATINGS[team_era]
+                max_date = hist_team[hist_team["elo"] == max_elo]["date"].iloc[0].strftime("%Y-%m")
+                min_date = hist_team[hist_team["elo"] == min_elo]["date"].iloc[0].strftime("%Y-%m")
+                
+                st.metric("Elo Atual", f"{current_elo:.0f}")
+                st.metric("Pico Histórico", f"{max_elo:.0f} ({max_date})")
+                st.metric("Mínimo Histórico", f"{min_elo:.0f} ({min_date})")
+                
             compare_df = pd.DataFrame({
                 "Métrica": ["Atual", "Pico", "Mínimo"],
                 "Elo": [current_elo, max_elo, min_elo]
             })
             fig_comp = px.bar(compare_df, x="Métrica", y="Elo", color="Métrica", 
                               color_discrete_sequence=[ACCENT, POSITIVE, NEGATIVE],
-                              title=f"Desempenho histórico de {team_era}")
-            fig_comp.update_layout(template=PLOTLY_TEMPLATE, height=300, showlegend=False)
+                              title=f"Desempenho: {team_era}")
+            fig_comp.update_layout(template=PLOTLY_TEMPLATE, height=300, showlegend=False, margin=dict(t=30, b=10))
             st.plotly_chart(fig_comp, use_container_width=True)
         else:
             st.info("Sem dados históricos suficientes.")
-    
-    st.markdown("---")
-    st.subheader("📅 Média de Elo por Década (Top 10)")
-    HISTORY_copy = HISTORY.copy()
-    HISTORY_copy["decade"] = (HISTORY_copy["date"].dt.year // 10) * 10
-    decades = sorted(HISTORY_copy["decade"].dropna().unique())
-    selected_decade = st.selectbox("Selecione a década", decades, index=len(decades)-1)
-    decade_data = HISTORY_copy[HISTORY_copy["decade"] == selected_decade]
-    avg_by_team = decade_data.groupby("team")["elo"].mean().sort_values(ascending=False).head(10).reset_index()
-    avg_by_team.columns = ["Seleção", "Elo Médio"]
-    fig_decade = px.bar(avg_by_team, x="Elo Médio", y="Seleção", orientation="h",
-                        color="Elo Médio", color_continuous_scale="Viridis",
-                        title=f"Top 10 seleções na década de {int(selected_decade)}")
-    fig_decade.update_layout(template=PLOTLY_TEMPLATE, height=400)
-    st.plotly_chart(fig_decade, use_container_width=True)
+            
+    with col_era2:
+        st.subheader("📅 Média de Elo por Década (Top 10)")
+        HISTORY_copy = HISTORY.copy()
+        HISTORY_copy["decade"] = (HISTORY_copy["date"].dt.year // 10) * 10
+        decades = sorted(HISTORY_copy["decade"].dropna().unique())
+        selected_decade = st.selectbox("Selecione a década", decades, index=len(decades)-1)
+        decade_data = HISTORY_copy[HISTORY_copy["decade"] == selected_decade]
+        avg_by_team = decade_data.groupby("team")["elo"].mean().sort_values(ascending=False).head(10).reset_index()
+        avg_by_team.columns = ["Seleção", "Elo Médio"]
+        fig_decade = px.bar(avg_by_team, x="Elo Médio", y="Seleção", orientation="h",
+                            color="Elo Médio", color_continuous_scale="Viridis",
+                            title=f"Top 10 seleções na década de {int(selected_decade)}")
+        fig_decade.update_layout(template=PLOTLY_TEMPLATE, height=500, margin=dict(t=40, b=10))
+        st.plotly_chart(fig_decade, use_container_width=True)
     
     with st.expander("🔥 Mapa de Calor da Evolução (seleções vs tempo)", expanded=False):
         st.caption("Exibe a variação de Elo ao longo dos anos para as principais seleções. Pode demorar um pouco.")
@@ -413,7 +422,10 @@ with tab1:
         history_heat["year"] = history_heat["date"].dt.year
         heat_pivot = history_heat.groupby(["year", "team"])["elo"].mean().reset_index()
         heat_pivot = heat_pivot.pivot(index="team", columns="year", values="elo")
-        heat_pivot = heat_pivot.fillna(method='ffill', axis=1).fillna(method='bfill', axis=1).fillna(INITIAL_ELO)
+        
+        # CORREÇÃO AQUI: Ffill e Bfill nativos (Pandas >= 2.0)
+        heat_pivot = heat_pivot.ffill(axis=1).bfill(axis=1).fillna(INITIAL_ELO)
+        
         heat_pivot = heat_pivot.reindex(ranking_df.head(n_heat)["Seleção"].tolist())
         fig_heat = go.Figure(data=go.Heatmap(
             z=heat_pivot.values,
@@ -438,12 +450,14 @@ with tab1:
 # ---------------------------------------------------------------------------
 with tab2:
     st.subheader("Confronto Direto")
-    c1, c2 = st.columns(2)
-    with c1:
-        team_a = st.selectbox("Seleção A", ALL_TEAMS, index=ALL_TEAMS.index("Brazil") if "Brazil" in ALL_TEAMS else 0)
-    with c2:
-        default_b_idx = ALL_TEAMS.index("Argentina") if "Argentina" in ALL_TEAMS else 1
-        team_b = st.selectbox("Seleção B", ALL_TEAMS, index=default_b_idx)
+    
+    with st.container(border=True):
+        c1, c2 = st.columns(2)
+        with c1:
+            team_a = st.selectbox("Seleção A", ALL_TEAMS, index=ALL_TEAMS.index("Brazil") if "Brazil" in ALL_TEAMS else 0)
+        with c2:
+            default_b_idx = ALL_TEAMS.index("Argentina") if "Argentina" in ALL_TEAMS else 1
+            team_b = st.selectbox("Seleção B", ALL_TEAMS, index=default_b_idx)
 
     h2h = RESULTS[
         ((RESULTS["home_team"] == team_a) & (RESULTS["away_team"] == team_b)) |
@@ -461,35 +475,37 @@ with tab2:
         goals_a = h2h.apply(lambda r: r["home_score"] if r["home_team"] == team_a else r["away_score"], axis=1).sum()
         goals_b = h2h.apply(lambda r: r["home_score"] if r["home_team"] == team_b else r["away_score"], axis=1).sum()
 
-        m1, m2, m3, m4, m5 = st.columns(5)
-        m1.metric(f"Vitórias {team_a}", int(wins_a))
-        m2.metric("Empates", int(draws))
-        m3.metric(f"Vitórias {team_b}", int(wins_b))
-        m4.metric(f"Gols {team_a}", int(goals_a))
-        m5.metric(f"Gols {team_b}", int(goals_b))
+        with st.container(border=True):
+            m1, m2, m3, m4, m5 = st.columns(5)
+            m1.metric(f"Vitórias {team_a}", int(wins_a))
+            m2.metric("Empates", int(draws))
+            m3.metric(f"Vitórias {team_b}", int(wins_b))
+            m4.metric(f"Gols {team_a}", int(goals_a))
+            m5.metric(f"Gols {team_b}", int(goals_b))
 
         elo_a_val = CURRENT_RATINGS.get(team_a, INITIAL_ELO)
         elo_b_val = CURRENT_RATINGS.get(team_b, INITIAL_ELO)
         tier_a, color_a = elo_tier(elo_a_val)
         tier_b, color_b = elo_tier(elo_b_val)
 
-        cforma, cformb = st.columns(2)
-        with cforma:
-            st.markdown(
-                f"**{team_a}** — Elo `{elo_a_val:.1f}` "
-                f'<span class="tier-badge" style="border-color:{color_a};color:{color_a};">{tier_a}</span><br>'
-                f"Forma recente: {form_pills_html(RESULTS, team_a)}",
-                unsafe_allow_html=True
-            )
-        with cformb:
-            st.markdown(
-                f"**{team_b}** — Elo `{elo_b_val:.1f}` "
-                f'<span class="tier-badge" style="border-color:{color_b};color:{color_b};">{tier_b}</span><br>'
-                f"Forma recente: {form_pills_html(RESULTS, team_b)}",
-                unsafe_allow_html=True
-            )
+        with st.container(border=True):
+            cforma, cformb = st.columns(2)
+            with cforma:
+                st.markdown(
+                    f"**{team_a}** — Elo `{elo_a_val:.1f}` "
+                    f'<span class="tier-badge" style="border-color:{color_a};color:{color_a};">{tier_a}</span><br>'
+                    f"Forma recente: {form_pills_html(RESULTS, team_a)}",
+                    unsafe_allow_html=True
+                )
+            with cformb:
+                st.markdown(
+                    f"**{team_b}** — Elo `{elo_b_val:.1f}` "
+                    f'<span class="tier-badge" style="border-color:{color_b};color:{color_b};">{tier_b}</span><br>'
+                    f"Forma recente: {form_pills_html(RESULTS, team_b)}",
+                    unsafe_allow_html=True
+                )
 
-        col1, col2 = st.columns([1, 2])
+        col1, col2 = st.columns([1, 2], gap="large")
         with col1:
             pie = go.Figure(data=[go.Pie(
                 labels=[f"{team_a}", "Empate", f"{team_b}"],
@@ -497,7 +513,7 @@ with tab2:
                 hole=0.5,
                 marker=dict(colors=[ACCENT, "#999999", ACCENT2]),
             )])
-            pie.update_layout(template=PLOTLY_TEMPLATE, title="Distribuição de Resultados", height=350)
+            pie.update_layout(template=PLOTLY_TEMPLATE, title="Distribuição de Resultados", height=400)
             st.plotly_chart(pie, use_container_width=True)
 
         with col2:
@@ -509,9 +525,34 @@ with tab2:
             bar = go.Figure()
             colors = [ACCENT if v > 0 else (ACCENT2 if v < 0 else "#999999") for v in h2h_sorted["goal_diff"]]
             bar.add_trace(go.Bar(x=h2h_sorted["date"], y=h2h_sorted["goal_diff"], marker_color=colors))
-            bar.update_layout(template=PLOTLY_TEMPLATE, title=f"Saldo de Gols por Confronto (perspectiva {team_a})", height=350,
+            bar.update_layout(template=PLOTLY_TEMPLATE, title=f"Saldo de Gols por Confronto (perspectiva {team_a})", height=400,
                                yaxis_title="Saldo de gols")
             st.plotly_chart(bar, use_container_width=True)
+
+        st.markdown("---")
+        
+        col_tables1, col_tables2 = st.columns(2, gap="large")
+        
+        with col_tables1:
+            st.markdown("**Histórico de Confrontos**")
+            st.dataframe(
+                h2h[["date", "home_team", "away_team", "home_score", "away_score", "tournament"]],
+                use_container_width=True, hide_index=True, height=350
+            )
+
+        with col_tables2:
+            gs = DATA["goalscorers"]
+            gs_h2h = gs[
+                ((gs["home_team"] == team_a) & (gs["away_team"] == team_b)) |
+                ((gs["home_team"] == team_b) & (gs["away_team"] == team_a))
+            ]
+            gs_h2h = gs_h2h[gs_h2h["own_goal"] != True]
+            if not gs_h2h.empty:
+                top_scorers = gs_h2h.groupby(["scorer", "team"]).size().reset_index(name="Gols").sort_values("Gols", ascending=False).head(10)
+                st.markdown("**Maiores Artilheiros no Confronto**")
+                st.dataframe(top_scorers, use_container_width=True, hide_index=True, height=350)
+            else:
+                st.info("Sem dados de artilharia detalhados para o confronto.")
 
         so = DATA["shootouts"]
         so_h2h = so[
@@ -519,25 +560,9 @@ with tab2:
             ((so["home_team"] == team_b) & (so["away_team"] == team_a))
         ]
         if not so_h2h.empty:
-            st.markdown("**Disputas de pênaltis**")
-            st.dataframe(so_h2h[["date", "home_team", "away_team", "winner"]], use_container_width=True, hide_index=True)
-
-        st.markdown("**Histórico de Confrontos**")
-        st.dataframe(
-            h2h[["date", "home_team", "away_team", "home_score", "away_score", "tournament", "city", "country"]],
-            use_container_width=True, hide_index=True, height=300
-        )
-
-        gs = DATA["goalscorers"]
-        gs_h2h = gs[
-            ((gs["home_team"] == team_a) & (gs["away_team"] == team_b)) |
-            ((gs["home_team"] == team_b) & (gs["away_team"] == team_a))
-        ]
-        gs_h2h = gs_h2h[gs_h2h["own_goal"] != True]
-        if not gs_h2h.empty:
-            top_scorers = gs_h2h.groupby(["scorer", "team"]).size().reset_index(name="Gols").sort_values("Gols", ascending=False).head(10)
-            st.markdown("**Maiores artilheiros no confronto**")
-            st.dataframe(top_scorers, use_container_width=True, hide_index=True)
+            with st.container(border=True):
+                st.markdown("**Disputas de Pênaltis**")
+                st.dataframe(so_h2h[["date", "home_team", "away_team", "winner"]], use_container_width=True, hide_index=True)
 
 
 # ---------------------------------------------------------------------------
@@ -551,15 +576,16 @@ with tab3:
         unsafe_allow_html=True
     )
 
-    c1, c2, c3 = st.columns([2, 2, 1])
-    with c1:
-        home_pred = st.selectbox("Seleção da casa", ALL_TEAMS, key="home_pred",
-                                  index=ALL_TEAMS.index("Brazil") if "Brazil" in ALL_TEAMS else 0)
-    with c2:
-        away_pred = st.selectbox("Seleção visitante", ALL_TEAMS, key="away_pred",
-                                  index=ALL_TEAMS.index("Argentina") if "Argentina" in ALL_TEAMS else 1)
-    with c3:
-        neutral_pred = st.checkbox("Campo neutro", value=True)
+    with st.container(border=True):
+        c1, c2, c3 = st.columns([2, 2, 1])
+        with c1:
+            home_pred = st.selectbox("Seleção da casa", ALL_TEAMS, key="home_pred",
+                                      index=ALL_TEAMS.index("Brazil") if "Brazil" in ALL_TEAMS else 0)
+        with c2:
+            away_pred = st.selectbox("Seleção visitante", ALL_TEAMS, key="away_pred",
+                                      index=ALL_TEAMS.index("Argentina") if "Argentina" in ALL_TEAMS else 1)
+        with c3:
+            neutral_pred = st.checkbox("Campo neutro", value=True)
 
     if home_pred == away_pred:
         st.warning("Selecione seleções diferentes.")
@@ -569,63 +595,70 @@ with tab3:
         elo_a = CURRENT_RATINGS.get(away_pred, INITIAL_ELO)
         p_elo_home, p_elo_away = predict_match(elo_h, elo_a, neutral=neutral_pred)
 
-        m1, m2, m3 = st.columns(3)
-        m1.metric(f"Vitória {home_pred}", f"{result['p_home_win']*100:.1f}%")
-        m2.metric("Empate", f"{result['p_draw']*100:.1f}%")
-        m3.metric(f"Vitória {away_pred}", f"{result['p_away_win']*100:.1f}%")
+        with st.container(border=True):
+            m1, m2, m3 = st.columns(3)
+            m1.metric(f"Vitória {home_pred}", f"{result['p_home_win']*100:.1f}%")
+            m2.metric("Empate", f"{result['p_draw']*100:.1f}%")
+            m3.metric(f"Vitória {away_pred}", f"{result['p_away_win']*100:.1f}%")
 
-        gauge = go.Figure()
-        gauge.add_trace(go.Bar(
-            x=[result["p_home_win"]*100], y=["Probabilidade"], orientation="h",
-            name=home_pred, marker_color=ACCENT, text=f"{result['p_home_win']*100:.0f}%", textposition="inside",
-        ))
-        gauge.add_trace(go.Bar(
-            x=[result["p_draw"]*100], y=["Probabilidade"], orientation="h",
-            name="Empate", marker_color="#888", text=f"{result['p_draw']*100:.0f}%", textposition="inside",
-        ))
-        gauge.add_trace(go.Bar(
-            x=[result["p_away_win"]*100], y=["Probabilidade"], orientation="h",
-            name=away_pred, marker_color=ACCENT2, text=f"{result['p_away_win']*100:.0f}%", textposition="inside",
-        ))
-        gauge.update_layout(
-            template=PLOTLY_TEMPLATE, barmode="stack", height=120,
-            showlegend=True, xaxis=dict(range=[0, 100], showticklabels=False),
-            yaxis=dict(showticklabels=False), margin=dict(l=10, r=10, t=10, b=10),
-            legend=dict(orientation="h", yanchor="bottom", y=1.05),
-        )
-        st.plotly_chart(gauge, use_container_width=True)
+            gauge = go.Figure()
+            gauge.add_trace(go.Bar(
+                x=[result["p_home_win"]*100], y=["Probabilidade"], orientation="h",
+                name=home_pred, marker_color=ACCENT, text=f"{result['p_home_win']*100:.0f}%", textposition="inside",
+            ))
+            gauge.add_trace(go.Bar(
+                x=[result["p_draw"]*100], y=["Probabilidade"], orientation="h",
+                name="Empate", marker_color="#888", text=f"{result['p_draw']*100:.0f}%", textposition="inside",
+            ))
+            gauge.add_trace(go.Bar(
+                x=[result["p_away_win"]*100], y=["Probabilidade"], orientation="h",
+                name=away_pred, marker_color=ACCENT2, text=f"{result['p_away_win']*100:.0f}%", textposition="inside",
+            ))
+            gauge.update_layout(
+                template=PLOTLY_TEMPLATE, barmode="stack", height=120,
+                showlegend=True, xaxis=dict(range=[0, 100], showticklabels=False),
+                yaxis=dict(showticklabels=False), margin=dict(l=10, r=10, t=10, b=10),
+                legend=dict(orientation="h", yanchor="bottom", y=1.05),
+            )
+            st.plotly_chart(gauge, use_container_width=True)
 
-        m4, m5, m6 = st.columns(3)
-        m4.metric(f"λ gols {home_pred}", f"{result['lambda_home']:.2f}")
-        m5.metric(f"λ gols {away_pred}", f"{result['lambda_away']:.2f}")
-        m6.metric("Elo (referência)", f"{elo_h:.0f} vs {elo_a:.0f}")
+            st.markdown("---")
+            m4, m5, m6 = st.columns(3)
+            m4.metric(f"λ gols {home_pred}", f"{result['lambda_home']:.2f}")
+            m5.metric(f"λ gols {away_pred}", f"{result['lambda_away']:.2f}")
+            m6.metric("Elo (referência)", f"{elo_h:.0f} vs {elo_a:.0f}")
 
-        st.caption(f"Probabilidade implícita por Elo: {home_pred} {p_elo_home*100:.1f}% — {away_pred} {p_elo_away*100:.1f}% (modelo simplificado)")
+            st.caption(f"Probabilidade implícita por Elo: {home_pred} {p_elo_home*100:.1f}% — {away_pred} {p_elo_away*100:.1f}% (modelo simplificado)")
 
-        max_g = 6
-        sm = result["score_matrix"][:max_g+1, :max_g+1]
-        heat = go.Figure(data=go.Heatmap(
-            z=sm, x=[str(i) for i in range(max_g+1)], y=[str(i) for i in range(max_g+1)],
-            colorscale="Blues",
-            text=np.round(sm*100, 1), texttemplate="%{text}%",
-            hoverongaps=False,
-        ))
-        heat.update_layout(
-            template=PLOTLY_TEMPLATE,
-            title=f"Matriz de Probabilidade de Placar — {home_pred} (linhas) x {away_pred} (colunas)",
-            xaxis_title=f"Gols {away_pred}", yaxis_title=f"Gols {home_pred}",
-            height=500,
-        )
-        st.plotly_chart(heat, use_container_width=True)
+        col_heat, col_scores = st.columns([2, 1], gap="large")
+        
+        with col_heat:
+            max_g = 6
+            sm = result["score_matrix"][:max_g+1, :max_g+1]
+            heat = go.Figure(data=go.Heatmap(
+                z=sm, x=[str(i) for i in range(max_g+1)], y=[str(i) for i in range(max_g+1)],
+                colorscale="Blues",
+                text=np.round(sm*100, 1), texttemplate="%{text}%",
+                hoverongaps=False,
+            ))
+            heat.update_layout(
+                template=PLOTLY_TEMPLATE,
+                title=f"Matriz de Probabilidade de Placar",
+                xaxis_title=f"Gols {away_pred}", yaxis_title=f"Gols {home_pred}",
+                height=450,
+                margin=dict(t=50, b=10)
+            )
+            st.plotly_chart(heat, use_container_width=True)
 
-        flat = []
-        for i in range(max_g+1):
-            for j in range(max_g+1):
-                flat.append({"Placar": f"{i} x {j}", "Prob": sm[i, j]})
-        top_scores = pd.DataFrame(flat).sort_values("Prob", ascending=False).head(5)
-        top_scores["Prob"] = (top_scores["Prob"] * 100).round(1).astype(str) + "%"
-        st.markdown("**Placares mais prováveis**")
-        st.dataframe(top_scores, use_container_width=True, hide_index=True)
+        with col_scores:
+            flat = []
+            for i in range(max_g+1):
+                for j in range(max_g+1):
+                    flat.append({"Placar": f"{i} x {j}", "Prob": sm[i, j]})
+            top_scores = pd.DataFrame(flat).sort_values("Prob", ascending=False).head(10)
+            top_scores["Prob"] = (top_scores["Prob"] * 100).round(1).astype(str) + "%"
+            st.markdown("#### Placares mais prováveis")
+            st.dataframe(top_scores, use_container_width=True, hide_index=True, height=380)
 
 
 # ---------------------------------------------------------------------------
@@ -641,42 +674,49 @@ with tab4:
     if df_tourn.empty:
         st.warning("Nenhuma partida encontrada.")
     else:
-        col1, col2, col3, col4 = st.columns(4)
-        total_jogos = len(df_tourn)
-        total_gols = df_tourn["home_score"].sum() + df_tourn["away_score"].sum()
-        media_gols = total_gols / total_jogos
-        times_distintos = pd.concat([df_tourn["home_team"], df_tourn["away_team"]]).nunique()
+        with st.container(border=True):
+            col1, col2, col3, col4 = st.columns(4)
+            total_jogos = len(df_tourn)
+            total_gols = df_tourn["home_score"].sum() + df_tourn["away_score"].sum()
+            media_gols = total_gols / total_jogos
+            times_distintos = pd.concat([df_tourn["home_team"], df_tourn["away_team"]]).nunique()
 
-        col1.metric("Total de partidas", total_jogos)
-        col2.metric("Total de gols", total_gols)
-        col3.metric("Média de gols/jogo", f"{media_gols:.2f}")
-        col4.metric("Países participantes", times_distintos)
+            col1.metric("Total de partidas", total_jogos)
+            col2.metric("Total de gols", total_gols)
+            col3.metric("Média de gols/jogo", f"{media_gols:.2f}")
+            col4.metric("Países participantes", times_distintos)
 
-        gs = DATA["goalscorers"]
-        gs_tourn = gs.merge(
-            df_tourn[["date", "home_team", "away_team"]],
-            on=["date", "home_team", "away_team"],
-            how="inner"
-        )
-        gs_tourn = gs_tourn[gs_tourn["own_goal"] != True]
-        if not gs_tourn.empty:
-            top_scorers = (
-                gs_tourn.groupby("scorer")
-                .size()
-                .reset_index(name="gols")
-                .sort_values("gols", ascending=False)
-                .head(10)
+        col_t1, col_t2 = st.columns([1, 2], gap="large")
+        
+        with col_t1:
+            gs = DATA["goalscorers"]
+            gs_tourn = gs.merge(
+                df_tourn[["date", "home_team", "away_team"]],
+                on=["date", "home_team", "away_team"],
+                how="inner"
             )
-            st.subheader("Artilheiros do torneio")
-            st.dataframe(top_scorers, use_container_width=True, hide_index=True)
+            gs_tourn = gs_tourn[gs_tourn["own_goal"] != True]
+            if not gs_tourn.empty:
+                top_scorers = (
+                    gs_tourn.groupby("scorer")
+                    .size()
+                    .reset_index(name="gols")
+                    .sort_values("gols", ascending=False)
+                    .head(10)
+                )
+                st.markdown("#### Artilheiros Históricos")
+                st.dataframe(top_scorers, use_container_width=True, hide_index=True, height=400)
+            else:
+                st.info("Sem dados de artilharia detalhados para o torneio selecionado.")
 
-        df_tourn["year"] = df_tourn["date"].dt.year
-        gols_por_ano = df_tourn.groupby("year").apply(
-            lambda x: x["home_score"].sum() + x["away_score"].sum()
-        ).reset_index(name="gols")
-        fig = px.line(gols_por_ano, x="year", y="gols", title="Evolução de gols por ano")
-        fig.update_layout(template=PLOTLY_TEMPLATE)
-        st.plotly_chart(fig, use_container_width=True)
+        with col_t2:
+            df_tourn["year"] = df_tourn["date"].dt.year
+            gols_por_ano = df_tourn.groupby("year").apply(
+                lambda x: x["home_score"].sum() + x["away_score"].sum()
+            ).reset_index(name="gols")
+            fig = px.line(gols_por_ano, x="year", y="gols", title="Evolução de gols por ano")
+            fig.update_layout(template=PLOTLY_TEMPLATE, height=400)
+            st.plotly_chart(fig, use_container_width=True)
 
 
 # ---------------------------------------------------------------------------
@@ -699,16 +739,17 @@ with tab5:
         VALUATIONS = CLUB_DATA["valuations"]
         COMPETITIONS = CLUB_DATA["competitions"]
 
-        m1, m2, m3, m4 = st.columns(4)
-        m1.metric("Jogadores na base", f"{len(PLAYERS):,}".replace(",", "."))
-        m2.metric("Clubes", f"{len(CLUBS):,}".replace(",", "."))
-        m3.metric("Transferências registradas", f"{len(TRANSFERS):,}".replace(",", "."))
-        total_fees = TRANSFERS["transfer_fee"].sum()
-        m4.metric("Volume total negociado", f"€ {total_fees/1e9:.1f} bi")
+        with st.container(border=True):
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("Jogadores na base", f"{len(PLAYERS):,}".replace(",", "."))
+            m2.metric("Clubes", f"{len(CLUBS):,}".replace(",", "."))
+            m3.metric("Transferências registradas", f"{len(TRANSFERS):,}".replace(",", "."))
+            total_fees = TRANSFERS["transfer_fee"].sum()
+            m4.metric("Volume total negociado", f"€ {total_fees/1e9:.1f} bi")
 
         st.markdown("---")
         # 1. Fluxo de transferências entre ligas
-        st.markdown("### 🌍 Fluxo de Transferências entre Ligas")
+        st.markdown("#### 🌍 Fluxo de Transferências entre Ligas")
         seasons = sorted(TRANSFERS["transfer_season"].dropna().unique(), reverse=True)
         col1, col2 = st.columns([1, 3])
         with col1:
@@ -734,12 +775,12 @@ with tab5:
                     link=dict(source=sources, target=targets, value=[v / 1e6 for v in values], color="rgba(212,175,55,0.35)")
                 )])
                 fig_sankey.update_layout(template=PLOTLY_TEMPLATE, height=450,
-                                         title=f"Fluxo de investimento – {season_sel}")
+                                         title=f"Fluxo de investimento – {season_sel}", margin=dict(t=40, b=10))
                 st.plotly_chart(fig_sankey, use_container_width=True)
 
         st.markdown("---")
         # 2. Curva de valorização por idade
-        st.markdown("### 📈 Curva de Valorização de Mercado por Idade")
+        st.markdown("#### 📈 Curva de Valorização de Mercado por Idade")
         col3, col4 = st.columns([1, 3])
         with col3:
             position_sel = st.selectbox("Posição", ["Todas", "Attack", "Midfield", "Defender", "Goalkeeper"])
@@ -757,15 +798,14 @@ with tab5:
                 fig.add_vline(x=peak_age, line_dash="dash", line_color="#999999",
                               annotation_text=f"Pico ~ {int(peak_age)} anos")
                 fig.update_layout(template=PLOTLY_TEMPLATE, height=400,
-                                  xaxis_title="Idade", yaxis_title="Valor de mercado (€ milhões)",
-                                  title=f"Valor de Mercado por Idade — {position_sel}")
+                                  xaxis_title="Idade", yaxis_title="Valor de mercado (€ milhões)", margin=dict(t=30, b=10))
                 st.plotly_chart(fig, use_container_width=True)
 
         st.markdown("---")
         # 3. Maiores transferências + nacionalidades
-        col5, col6 = st.columns(2)
+        col5, col6 = st.columns(2, gap="large")
         with col5:
-            st.markdown("### 💸 Maiores Transferências da História")
+            st.markdown("#### 💸 Maiores Transferências da História")
             tt = top_transfers(TRANSFERS, n=15, min_fee=1_000_000)
             tt_display = tt.copy()
             tt_display["transfer_fee"] = (tt_display["transfer_fee"] / 1e6).round(1).astype(str) + " M€"
@@ -773,47 +813,48 @@ with tab5:
             st.dataframe(tt_display, use_container_width=True, hide_index=True, height=400)
 
         with col6:
-            st.markdown("### 🌎 Nacionalidade dos Jogadores por Liga")
+            st.markdown("#### 🌎 Nacionalidade dos Jogadores por Liga")
             comp_options = ["Todas"] + sorted(PLAYERS["current_club_domestic_competition_id"].dropna().unique().tolist())
             comp_labels = {c: COMPETITION_LABELS.get(c, c) for c in comp_options}
             comp_sel = st.selectbox("Liga", comp_options, format_func=lambda x: comp_labels.get(x, x))
             nat = nationality_distribution(PLAYERS, comp_sel).head(12)
-            fig = px.bar(nat, x="Jogadores", y="País", orientation="h",
-                         title=f"Top Nacionalidades — {comp_labels.get(comp_sel, comp_sel)}")
+            fig = px.bar(nat, x="Jogadores", y="País", orientation="h")
             fig.update_traces(marker_color=ACCENT)
-            fig.update_layout(template=PLOTLY_TEMPLATE, height=400, yaxis=dict(autorange="reversed"))
+            fig.update_layout(template=PLOTLY_TEMPLATE, height=380, yaxis=dict(autorange="reversed"), margin=dict(t=10, b=10))
             st.plotly_chart(fig, use_container_width=True)
 
         st.markdown("---")
+        
+        col_c1, col_c2 = st.columns(2, gap="large")
         # 4. Explorador de clubes
-        st.markdown("### 🏟️ Explorador de Clubes")
-        league_options = ["Todas"] + sorted(CLUBS["domestic_competition_id"].dropna().unique().tolist())
-        league_labels = {l: COMPETITION_LABELS.get(l, l) for l in league_options}
-        league_sel = st.selectbox("Filtrar por liga", league_options, format_func=lambda x: league_labels.get(x, x), key="club_league")
-        cs = club_summary(CLUBS, PLAYERS, league_sel).sort_values("squad_value_eur", ascending=False).head(20)
-        cs_display = cs.copy()
-        cs_display["squad_value_eur"] = (cs_display["squad_value_eur"] / 1e6).round(1).astype(str) + " M€"
-        cs_display.columns = ["Clube", "Elenco", "Idade Média", "% Estrangeiros", "Jogadores Sel. Nacional",
-                              "Valor do Elenco", "Estádio", "Capacidade"]
-        st.dataframe(cs_display, use_container_width=True, hide_index=True, height=400)
+        with col_c1:
+            st.markdown("#### 🏟️ Explorador de Clubes")
+            league_options = ["Todas"] + sorted(CLUBS["domestic_competition_id"].dropna().unique().tolist())
+            league_labels = {l: COMPETITION_LABELS.get(l, l) for l in league_options}
+            league_sel = st.selectbox("Filtrar por liga", league_options, format_func=lambda x: league_labels.get(x, x), key="club_league")
+            cs = club_summary(CLUBS, PLAYERS, league_sel).sort_values("squad_value_eur", ascending=False).head(20)
+            cs_display = cs.copy()
+            cs_display["squad_value_eur"] = (cs_display["squad_value_eur"] / 1e6).round(1).astype(str) + " M€"
+            cs_display.columns = ["Clube", "Elenco", "Idade Média", "% Estrangeiros", "Jogadores Sel. Nacional",
+                                  "Valor do Elenco", "Estádio", "Capacidade"]
+            st.dataframe(cs_display, use_container_width=True, hide_index=True, height=400)
 
-        st.markdown("---")
         # 5. Conexão Seleção ↔ Clube
-        st.markdown("### 🔗 Conexão Seleção ↔ Clube")
-        st.caption("Jogadores com mais presenças/gols pela seleção e o valor de mercado atual em seus clubes.")
-        bridge_team = st.selectbox("Seleção", sorted(PLAYERS["country_of_citizenship"].dropna().unique()),
-                                   index=0, key="bridge_team")
-        bridge = PLAYERS[PLAYERS["country_of_citizenship"] == bridge_team].copy()
-        bridge = bridge[bridge["international_caps"].notna() & (bridge["international_caps"] > 0)]
-        bridge = bridge.sort_values("international_caps", ascending=False).head(15)
-        if bridge.empty:
-            st.info("Sem dados internacionais suficientes para esta seleção na base.")
-        else:
-            bridge_display = bridge[["name", "current_club_name", "position", "international_caps",
-                                     "international_goals", "market_value_in_eur"]].copy()
-            bridge_display["market_value_in_eur"] = (bridge_display["market_value_in_eur"] / 1e6).round(1).astype(str) + " M€"
-            bridge_display.columns = ["Jogador", "Clube Atual", "Posição", "Jogos pela Seleção", "Gols pela Seleção", "Valor de Mercado"]
-            st.dataframe(bridge_display, use_container_width=True, hide_index=True)
+        with col_c2:
+            st.markdown("#### 🔗 Conexão Seleção ↔ Clube")
+            bridge_team = st.selectbox("Seleção", sorted(PLAYERS["country_of_citizenship"].dropna().unique()),
+                                       index=0, key="bridge_team")
+            bridge = PLAYERS[PLAYERS["country_of_citizenship"] == bridge_team].copy()
+            bridge = bridge[bridge["international_caps"].notna() & (bridge["international_caps"] > 0)]
+            bridge = bridge.sort_values("international_caps", ascending=False).head(15)
+            if bridge.empty:
+                st.info("Sem dados internacionais suficientes para esta seleção na base.")
+            else:
+                bridge_display = bridge[["name", "current_club_name", "position", "international_caps",
+                                         "international_goals", "market_value_in_eur"]].copy()
+                bridge_display["market_value_in_eur"] = (bridge_display["market_value_in_eur"] / 1e6).round(1).astype(str) + " M€"
+                bridge_display.columns = ["Jogador", "Clube Atual", "Posição", "Jogos Pela Seleção", "Gols", "Valor de Mercado"]
+                st.dataframe(bridge_display, use_container_width=True, hide_index=True, height=400)
 
 
 # ---------------------------------------------------------------------------
@@ -914,15 +955,16 @@ with tab7:
     df_stadiums = load_stadiums_data()
 
     if not df_stadiums.empty:
-        st.markdown("#### 🔍 Filtros do mapa")
-        col1, col2 = st.columns([1, 2])
-        with col1:
-            pais_mapa = st.selectbox(
-                "País em destaque",
-                ["Todos"] + sorted(df_stadiums["Country"].unique())
-            )
-        with col2:
-            busca = st.text_input("Buscar estádio por nome", "")
+        with st.container(border=True):
+            st.markdown("#### 🔍 Filtros do mapa")
+            col1, col2 = st.columns([1, 2])
+            with col1:
+                pais_mapa = st.selectbox(
+                    "País em destaque",
+                    ["Todos"] + sorted(df_stadiums["Country"].unique())
+                )
+            with col2:
+                busca = st.text_input("Buscar estádio por nome", "")
 
         df_plot = df_stadiums.copy()
         if pais_mapa != "Todos":
@@ -942,7 +984,6 @@ with tab7:
                 attr='OpenStreetMap contributors'
             )
 
-            # Alterado para cartodb positron visando mapa claro minimalista
             folium.TileLayer(
                 tiles='CartoDB positron',
                 name='Claro Minimalista',
@@ -968,7 +1009,7 @@ with tab7:
                 folium.Marker(
                     location=[row["Latitude"], row["Longitude"]],
                     popup=folium.Popup(popup_html, max_width=300),
-                    icon=folium.Icon(color='blue', icon='futbol-o', prefix='fa') # Icone reajustado para melhorar visualização com mapa claro
+                    icon=folium.Icon(color='blue', icon='futbol-o', prefix='fa')
                 ).add_to(marker_cluster)
 
             folium.LayerControl().add_to(m)
