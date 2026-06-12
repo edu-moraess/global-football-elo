@@ -195,19 +195,17 @@ tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
 
 
 # ---------------------------------------------------------------------------
-# TAB 1 — ELO RANKING & EVOLUÇÃO (CORRIGIDA)
+# TAB 1 — ELO RANKING & EVOLUÇÃO (CORRIGIDA - SEM KeyError)
 # ---------------------------------------------------------------------------
 with tab1:
     st.subheader("📊 Ranking e Métricas Avançadas")
 
-    # Preparar dados de ranking com métricas adicionais
     cutoff_12m = HISTORY["date"].max() - pd.DateOffset(months=12)
     recent_12m = HISTORY[HISTORY["date"] >= cutoff_12m]
     
     ranking_data = []
     for team in ALL_TEAMS:
         elo_atual = CURRENT_RATINGS[team]
-        # Elo há 12 meses
         ts = HISTORY[HISTORY["team"] == team].sort_values("date")
         if len(ts) >= 2:
             ts_before = ts[ts["date"] <= cutoff_12m]
@@ -219,7 +217,6 @@ with tab1:
             elo_12m = elo_atual
         delta_12m = elo_atual - elo_12m
         
-        # Força ofensiva/defensiva (acesso seguro)
         team_strength = STRENGTH.get(team, {})
         if isinstance(team_strength, dict):
             atk = team_strength.get("attack", 1.0)
@@ -228,7 +225,6 @@ with tab1:
             atk, defense = 1.0, 1.0
         
         jogos_12m = len(recent_12m[recent_12m["team"] == team])
-        
         ranking_data.append({
             "Seleção": team,
             "Elo": round(elo_atual, 1),
@@ -240,15 +236,12 @@ with tab1:
         })
     
     ranking_df = pd.DataFrame(ranking_data).sort_values("Elo", ascending=False).reset_index(drop=True)
-    # Adicionar coluna de Rank (índice baseado em 1)
-    ranking_df.insert(0, "Rank", range(1, len(ranking_df) + 1))
-    
-    # Heurística para variação de posição (Δ Pos) – usando a coluna Rank recém-criada
-    ranking_df["PosAnterior"] = ranking_df["Rank"] + (ranking_df["Δ12m"] / 5).round().astype(int)
-    ranking_df["ΔPos"] = ranking_df["PosAnterior"] - ranking_df["Rank"]
+    # Calcular ΔPos usando o índice (rank = índice + 1)
+    ranking_df["ΔPos"] = ((ranking_df.index + 1) + (ranking_df["Δ12m"] / 5).round().astype(int)) - (ranking_df.index + 1)
     ranking_df["ΔPos"] = ranking_df["ΔPos"].clip(-20, 20)
+    # Adicionar coluna Rank visível (opcional, mas útil)
+    ranking_df.insert(0, "Rank", ranking_df.index + 1)
     
-    # --- Layout com colunas ---
     col_left, col_right = st.columns([1.2, 1.8])
     
     with col_left:
@@ -270,6 +263,7 @@ with tab1:
                 "Ataque": st.column_config.NumberColumn("Força Ofensiva", format="%.2f"),
                 "Defesa": st.column_config.NumberColumn("Força Defensiva", format="%.2f"),
                 "Jogos (12m)": st.column_config.Column("Jogos", help="Partidas nos últimos 12 meses"),
+                "Tier": st.column_config.Column("Tier"),
             }
         )
         
@@ -426,7 +420,7 @@ with tab1:
 
 
 # ---------------------------------------------------------------------------
-# TAB 2 — HEAD TO HEAD (mantido original)
+# TAB 2 — HEAD TO HEAD
 # ---------------------------------------------------------------------------
 with tab2:
     st.subheader("Confronto Direto")
