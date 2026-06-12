@@ -668,7 +668,7 @@ with tab6:
 
     ### 🗺️ **Estádios**
     - Estádios com coordenadas geográficas obtidos via Wikidata (SPARQL).
-    - Mapa interativo com busca e filtros.
+    - Mapa interativo com zoom, busca e filtros.
 
     ### 📂 **Fontes**
     - Partidas internacionais: [Football Results (1872-2024)](https://www.kaggle.com/datasets/martj42/international-football-results-from-1872-to-2017)
@@ -683,10 +683,11 @@ with tab6:
 
 
 # ---------------------------------------------------------------------------
-# TAB 7 — ESTÁDIOS (MAPA INTERATIVO)
+# TAB 7 — ESTÁDIOS (MAPA INTERATIVO COM ZOOM)
 # ---------------------------------------------------------------------------
 with tab7:
     st.subheader("🗺️ Mapa Mundial de Estádios")
+    st.markdown("Use o scroll do mouse para aproximar (zoom) e arraste para navegar. Passe o mouse sobre um ponto para ver detalhes.")
 
     @st.cache_data
     def load_stadiums_data():
@@ -762,13 +763,35 @@ with tab7:
             title=f"Estádios ({len(df_plot)} de {len(df_stadiums)})"
         )
 
+        # Configuração visual do globo
+        fig.update_geos(
+            showland=True,
+            landcolor="rgb(243, 243, 243)",          # cinza bem claro para terra
+            showocean=True,
+            oceancolor="rgb(230, 240, 255)",         # azul bem suave para mar
+            showcountries=True,
+            countrycolor="rgb(180, 180, 180)",       # bordas dos países
+            coastlinecolor="rgb(150, 150, 150)",
+            showframe=False
+        )
+
         fig.update_traces(marker=dict(size=5, opacity=0.7, line=dict(width=0.5, color='DarkSlateGrey')))
+
+        # Layout interativo: zoom e pan já são nativos, mas podemos configurar limites e botões
         fig.update_layout(
             template=PLOTLY_TEMPLATE,
             height=600,
             margin=dict(l=0, r=0, t=40, b=0),
-            showlegend=False
+            showlegend=False,
+            geo=dict(
+                bgcolor='rgba(255,255,255,0)',
+                projection_scale=1,            # escala inicial
+                center=dict(lon=0, lat=20),    # centro inicial do mapa
+            ),
+            # Botões de controle de zoom (opcional)
+            modebar_add=['zoomInGeo', 'zoomOutGeo', 'resetGeo']
         )
+
         st.plotly_chart(fig, use_container_width=True)
 
         st.markdown("---")
