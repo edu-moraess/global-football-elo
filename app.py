@@ -700,7 +700,6 @@ with tab7:
         stadiums_gps = pd.DataFrame()
         stadiums_info = pd.DataFrame()
 
-        # Lê GPS – com fallback de encoding
         if gps_path.exists():
             try:
                 stadiums_gps = pd.read_csv(gps_path, encoding='utf-8')
@@ -712,7 +711,6 @@ with tab7:
         else:
             st.warning("Arquivo 'futebol_stadiums.csv' (com coordenadas) não encontrado em data/")
 
-        # Lê informações (capacidade, confederação etc.) – com fallback de encoding
         if info_path.exists():
             try:
                 stadiums_info = pd.read_csv(info_path, encoding='utf-8')
@@ -796,20 +794,36 @@ with tab7:
         if parte_files:
             dfs = []
             for file in parte_files:
-                df_part = pd.read_csv(file)
+                try:
+                    df_part = pd.read_csv(file, encoding='utf-8')
+                except UnicodeDecodeError:
+                    df_part = pd.read_csv(file, encoding='latin1')
                 dfs.append(df_part)
                 st.info(f"📂 Carregado: {file.name} ({len(df_part):,} linhas)")
             df_full = pd.concat(dfs, ignore_index=True)
             st.success(f"✅ Total carregado das {len(parte_files)} partes: {len(df_full):,} registros.")
         elif original_file.exists():
-            df_full = pd.read_csv(original_file, sep=';')
+            try:
+                df_full = pd.read_csv(original_file, sep=';', encoding='utf-8')
+            except UnicodeDecodeError:
+                df_full = pd.read_csv(original_file, sep=';', encoding='latin1')
             st.success(f"✅ Carregado arquivo original: {len(df_full):,} registros.")
         else:
             st.warning("Nenhum arquivo de técnicos encontrado (people_parte*.csv ou people.csv).")
             return pd.DataFrame()
 
-        if 'type' in df_full.columns:
-            df_coaches = df_full[df_full['type'] == 'coach'].copy()
+        # Limpa espaços em branco dos nomes das colunas
+        df_full.columns = df_full.columns.str.strip()
+
+        # Procura coluna 'type' de forma case-insensitive
+        type_col = None
+        for col in df_full.columns:
+            if col.lower() == 'type':
+                type_col = col
+                break
+
+        if type_col:
+            df_coaches = df_full[df_full[type_col] == 'coach'].copy()
             st.caption(f"🎯 Filtrados {len(df_coaches):,} técnicos (type='coach').")
         else:
             df_coaches = df_full.copy()
