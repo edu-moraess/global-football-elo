@@ -18,10 +18,18 @@ COMPETITION_LABELS = {
 
 
 def load_club_data():
-    players = pd.read_csv(DATA_DIR / "players.csv", low_memory=False)
+    players_parts = sorted(DATA_DIR.glob("players_part*.csv"))
+    if players_parts:
+        players = pd.concat([pd.read_csv(p, low_memory=False) for p in players_parts], ignore_index=True)
+    else:
+        players = pd.read_csv(DATA_DIR / "players.csv", low_memory=False)
     clubs = pd.read_csv(DATA_DIR / "clubs.csv", low_memory=False)
     transfers = pd.read_csv(DATA_DIR / "transfers.csv", low_memory=False)
-    valuations = pd.read_csv(DATA_DIR / "player_valuations.csv", low_memory=False)
+    valuations_parts = sorted(DATA_DIR.glob("player_valuations_part*.csv"))
+    if valuations_parts:
+        valuations = pd.concat([pd.read_csv(p, low_memory=False) for p in valuations_parts], ignore_index=True)
+    else:
+        valuations = pd.read_csv(DATA_DIR / "player_valuations.csv", low_memory=False)
     competitions = pd.read_csv(DATA_DIR / "competitions.csv", low_memory=False)
 
     players["date_of_birth"] = pd.to_datetime(players["date_of_birth"], errors="coerce")
