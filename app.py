@@ -1,5 +1,5 @@
 """
-Edumetria | Global Football Intelligence
+Global Football Intelligence
 Painel quantitativo: Elo Ratings, Head-to-Head, Predição Poisson
 Dataset: International football results (1872-2024)
 """
@@ -20,7 +20,7 @@ from elo_engine import (
 # CONFIG & THEME
 # ---------------------------------------------------------------------------
 st.set_page_config(
-    page_title="Edumetria | Global Football Intelligence",
+    page_title="Global Football Intelligence",
     page_icon="⚽",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -157,15 +157,15 @@ ALL_TEAMS = sorted(CURRENT_RATINGS.keys())
 # ---------------------------------------------------------------------------
 st.title("⚽ Global Football Intelligence")
 st.markdown(
-    f'<div class="caption-box">EDUMETRIA RESEARCH &nbsp;|&nbsp; '
+    f'<div class="caption-box">'
     f'Elo Rating Engine &middot; Head-to-Head Analytics &middot; Modelo Poisson de Predição &nbsp;|&nbsp; '
     f'Base histórica: {RESULTS["date"].min().date()} — {RESULTS["date"].max().date()} '
     f'&nbsp;|&nbsp; {len(RESULTS):,} partidas</div>'.replace(",", "."),
     unsafe_allow_html=True
 )
 
-tab1, tab2, tab3, tab4 = st.tabs([
-    "📊 Elo Ranking & Evolução", "🆚 Head-to-Head", "🎯 Predição Poisson", "ℹ️ Metodologia"
+tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    "📊 Elo Ranking & Evolução", "🆚 Head-to-Head", "🎯 Predição Poisson", "🏆 Tournament Analytics", "ℹ️ Metodologia"
 ])
 
 
@@ -448,9 +448,158 @@ with tab3:
 
 
 # ---------------------------------------------------------------------------
-# TAB 4 — METHODOLOGY
+# TAB 4 — TOURNAMENT ANALYTICS
 # ---------------------------------------------------------------------------
 with tab4:
+    st.subheader("Painel de Torneios & Cruzamentos")
+
+    GS = DATA["goalscorers"]
+    all_tournaments = sorted(RESULTS["tournament"].unique())
+    default_tourns = [t for t in ["FIFA World Cup", "Copa América", "UEFA Euro"] if t in all_tournaments]
+
+    fc1, fc2, fc3 = st.columns([2, 1, 1])
+    with fc1:
+        sel_tournaments = st.multiselect("Torneios", all_tournaments, default=default_tourns or all_tournaments[:1])
+    with fc2:
+        year_min, year_max = int(RESULTS["date"].dt.year.min()), int(RESULTS["date"].dt.year.max())
+        yr_range = st.slider("Período", year_min, year_max, (1990, year_max))
+    with fc3:
+        sel_confed_team = st.selectbox("Filtrar por seleção (opcional)", ["Todas"] + ALL_TEAMS)
+
+    if not sel_tournaments:
+        st.info("Selecione ao menos um torneio.")
+    else:
+        mask = (
+            RESULTS["tournament"].isin(sel_tournaments) &
+            (RESULTS["date"].dt.year >= yr_range[0]) &
+            (RESULTS["date"].dt.year <= yr_range[1])
+        )
+        TR = RESULTS[mask].copy()
+        if sel_confed_team != "Todas":
+            TR = TR[(TR["home_team"] == sel_confed_team) | (TR["away_team"] == sel_confed_team)]
+
+        if TR.empty:
+            st.warning("Nenhuma partida encontrada para os filtros selecionados.")
+        else:
+            TR["total_goals"] = TR["home_score"] + TR["away_score"]
+
+            # --- Top metrics row ---
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("Partidas", f"{len(TR):,}".replace(",", "."))
+            m2.metric("Gols/Jogo (média)", f"{TR['total_goals'].mean():.2f}")
+            home_win_rate = (TR["home_score"] > TR["away_score"]).mean() * 100
+            m3.metric("Taxa Vitória Casa", f"{home_win_rate:.1f}%")
+            draw_rate = (TR["home_score"] == TR["away_score"]).mean() * 100
+            m4.metric("Taxa de Empates", f"{draw_rate:.1f}%")
+
+            # --- Goals per edition trend + Home advantage over time ---
+            c1, c2 = st.columns(2)
+            with c1:
+                by_year = TR.groupby(TR["date"].dt.year)["total_goals"].mean().reset_index()
+                by_year.columns = ["Ano", "Gols/Jogo"]
+                fig = px.line(by_year, x="Ano", y="Gols/Jogo", markers=True,
+                               title="Média de Gols por Jogo ao Longo do Tempo")
+                fig.update_traces(line_color=ACCENT)
+                fig.update_layout(template=PLOTLY_TEMPLATE, height=380)
+                st.plotly_chart(fig, use_container_width=True)
+
+            with c2:
+                TR["result"] = np.where(TR["home_score"] > TR["away_score"], "Casa",
+                                  np.where(TR["home_score"] < TR["away_score"], "Visitante", "Empate"))
+                by_year_res = TR.groupby([TR["date"].dt.year, "result"]).size().reset_index(name="count")
+                by_year_res.columns = ["Ano", "Resultado", "Jogos"]
+                fig = px.area(by_year_res, x="Ano", y="Jogos", color="Resultado",
+                               title="Distribuição de Resultados por Ano (%)", groupnorm="fraction",
+                               color_discrete_map={"Casa": ACCENT, "Visitante": ACCENT2, "Empate": "#999999"})
+                fig.update_layout(template=PLOTLY_TEMPLATE, height=380, yaxis_tickformat=".0%")
+                st.plotly_chart(fig, use_container_width=True)
+
+            # --- Goal minute distribution + penalty/own-goal breakdown ---
+            c3, c4 = st.columns(2)
+            with c3:
+                gs_match_ids = set(zip(TR["date"].astype(str), TR["home_team"], TR["away_team"]))
+                GS_local = GS.copy()
+                GS_local["key"] = list(zip(GS_local["date"].astype(str), GS_local["home_team"], GS_local["away_team"]))
+                GS_filtered = GS_local[GS_local["key"].isin(gs_match_ids)]
+
+                if not GS_filtered.empty:
+                    fig = px.histogram(GS_filtered, x="minute", nbins=18,
+                                        title="Distribuição de Gols por Minuto")
+                    fig.update_traces(marker_color=ACCENT)
+                    fig.update_layout(template=PLOTLY_TEMPLATE, height=380,
+                                       xaxis_title="Minuto", yaxis_title="Nº de Gols")
+                    # highlight halftime/fulltime zones
+                    fig.add_vline(x=45, line_dash="dot", line_color=ACCENT2, opacity=0.5)
+                    fig.add_vline(x=90, line_dash="dot", line_color=ACCENT2, opacity=0.5)
+                    st.plotly_chart(fig, use_container_width=True)
+                else:
+                    st.info("Sem dados de artilheiros para este filtro.")
+
+            with c4:
+                if not GS_filtered.empty:
+                    pen_rate = GS_filtered["penalty"].mean() * 100
+                    og_rate = GS_filtered["own_goal"].mean() * 100
+                    normal_rate = 100 - pen_rate - og_rate
+                    fig = go.Figure(data=[go.Pie(
+                        labels=["Gols de jogo", "Pênaltis", "Gols contra"],
+                        values=[normal_rate, pen_rate, og_rate],
+                        hole=0.5,
+                        marker=dict(colors=[ACCENT, ACCENT2, "#999999"]),
+                    )])
+                    fig.update_layout(template=PLOTLY_TEMPLATE, height=380, title="Composição dos Gols (%)")
+                    st.plotly_chart(fig, use_container_width=True)
+
+            # --- Host country map + most active teams ---
+            c5, c6 = st.columns(2)
+            with c5:
+                host_counts = TR["country"].value_counts().reset_index()
+                host_counts.columns = ["País", "Jogos"]
+                fig = px.choropleth(host_counts, locations="País", locationmode="country names",
+                                     color="Jogos", color_continuous_scale="YlOrRd",
+                                     title="Jogos Sediados por País")
+                fig.update_layout(template=PLOTLY_TEMPLATE, height=400, geo=dict(bgcolor="rgba(0,0,0,0)"))
+                st.plotly_chart(fig, use_container_width=True)
+
+            with c6:
+                home_app = TR["home_team"].value_counts()
+                away_app = TR["away_team"].value_counts()
+                total_app = (home_app.add(away_app, fill_value=0)).sort_values(ascending=False).head(15)
+                fig = px.bar(x=total_app.values, y=total_app.index, orientation="h",
+                              title="Seleções com Mais Partidas no Filtro")
+                fig.update_traces(marker_color=ACCENT)
+                fig.update_layout(template=PLOTLY_TEMPLATE, height=400,
+                                   xaxis_title="Partidas", yaxis_title="", yaxis=dict(autorange="reversed"))
+                st.plotly_chart(fig, use_container_width=True)
+
+            # --- Top scorers table ---
+            st.subheader("Artilheiros do Filtro")
+            if not GS_filtered.empty:
+                top_scorers_all = (
+                    GS_filtered[GS_filtered["own_goal"] != True]
+                    .groupby(["scorer", "team"])
+                    .agg(Gols=("scorer", "size"), Pênaltis=("penalty", "sum"))
+                    .reset_index()
+                    .sort_values("Gols", ascending=False)
+                    .head(15)
+                )
+                top_scorers_all.columns = ["Jogador", "Seleção", "Gols", "Pênaltis"]
+                st.dataframe(top_scorers_all, use_container_width=True, hide_index=True)
+            else:
+                st.info("Sem dados de artilheiros para este filtro.")
+
+            # --- Raw match browser ---
+            st.subheader("Explorador de Partidas")
+            st.dataframe(
+                TR[["date", "home_team", "away_team", "home_score", "away_score", "tournament", "city", "country"]]
+                .sort_values("date", ascending=False),
+                use_container_width=True, hide_index=True, height=350
+            )
+
+
+# ---------------------------------------------------------------------------
+# TAB 5 — METHODOLOGY
+# ---------------------------------------------------------------------------
+with tab5:
     st.subheader("Metodologia")
     st.markdown("""
 **Fonte de dados**: International football results, 1872 a 2024 (results, goalscorers, shootouts, former_names).
@@ -473,10 +622,14 @@ with tab4:
 - O modelo não captura lesões, escalações, condições de jogo ou contexto situacional (jogo decisivo, dérbi etc.).
 - Seleções com poucos jogos recentes (<5 no período de 10 anos) não entram no modelo Poisson.
 - Indicado para fins analíticos e exploratórios, não como recomendação de apostas.
+**Roadmap**
+- Integração futura de dataset de jogadores (estatísticas individuais, clubes, posições) para enriquecer
+  a aba de Artilheiros e permitir análises cross-seleção/clube.
+- Times adicionais (ligas domésticas) poderão ser incorporados como módulo complementar ao Tournament Analytics.
     """)
 
 st.markdown(
     f'<div style="text-align:center; font-size:0.75rem; opacity:0.6; margin-top:2rem; '
-    f'font-family:\'IBM Plex Mono\',monospace;">EDUMETRIA RESEARCH — Quantitative Football Analytics</div>',
+    f'font-family:\'IBM Plex Mono\',monospace;">Global Football Intelligence — Quant Analytics</div>',
     unsafe_allow_html=True
 )
