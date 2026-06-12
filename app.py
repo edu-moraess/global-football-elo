@@ -1,7 +1,7 @@
 """
 Global Football Intelligence
 Painel quantitativo: Elo Ratings, Head-to-Head, Predição Poisson
-Dataset: International football results (1872-2024) + Transfermarkt + Reep (técnicos) + Estádios
+Dataset: International football results (1872-2024) + Transfermarkt + Estádios (Wikidata)
 """
 import streamlit as st
 import pandas as pd
@@ -185,7 +185,7 @@ tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
     "🏆 Tournament Analytics",
     "💰 Player Market Intelligence",
     "ℹ️ Metodologia",
-    "🗺️ Estádios & Técnicos"
+    "🗺️ Estádios"
 ])
 
 
@@ -667,12 +667,13 @@ with tab6:
     - Curva de valorização por idade, maiores transferências, fluxo financeiro entre ligas, distribuição de nacionalidades e resumo financeiro dos clubes.
 
     ### 🗺️ **Estádios**
-    - Estádios com coordenadas geográficas para visualização em mapa.
+    - Estádios com coordenadas geográficas obtidos via Wikidata (SPARQL).
+    - Inclui nome, país, time mandante e liga.
 
     ### 📂 **Fontes**
     - Partidas internacionais: [Football Results (1872-2024)](https://www.kaggle.com/datasets/martj42/international-football-results-from-1872-to-2017)
     - Dados de mercado: [Transfermarkt Dataset](https://www.kaggle.com/datasets/davidcariboo/player-scores)
-    - Estádios: WorldSoccerStadiums + Football Stadiums (Kaggle)
+    - Estádios: Wikidata SPARQL endpoint (dados extraídos em 2024)
     - Processamento e visualização: **Python, Pandas, Plotly, Streamlit**.
 
     ---
@@ -682,60 +683,40 @@ with tab6:
 
 
 # ---------------------------------------------------------------------------
-# TAB 7 — ESTÁDIOS
+# TAB 7 — ESTÁDIOS (novo dataset Wikidata)
 # ---------------------------------------------------------------------------
 with tab7:
     st.subheader("🗺️ Mapa Mundial de Estádios")
 
     @st.cache_data
     def load_stadiums_data():
-        gps_path = Path("data/futebol_stadiums.csv")
-        info_path = Path("data/Football Stadiums.csv")
+        path = Path("data/top_1000_stadiums_world.csv")
 
-        stadiums_gps = pd.DataFrame()
-        stadiums_info = pd.DataFrame()
+        if not path.exists():
+            st.warning("Arquivo 'top_1000_stadiums_world.csv' não encontrado em data/")
+            return pd.DataFrame()
 
-        if gps_path.exists():
-            try:
-                stadiums_gps = pd.read_csv(gps_path, encoding='utf-8')
-            except UnicodeDecodeError:
-                stadiums_gps = pd.read_csv(gps_path, encoding='latin1')
-            stadiums_gps["Latitude"] = pd.to_numeric(stadiums_gps.get("Latitude", pd.Series()), errors="coerce")
-            stadiums_gps["Longitude"] = pd.to_numeric(stadiums_gps.get("Longitude", pd.Series()), errors="coerce")
-            stadiums_gps = stadiums_gps.dropna(subset=["Latitude", "Longitude"])
-        else:
-            st.warning("Arquivo 'futebol_stadiums.csv' (com coordenadas) não encontrado em data/")
+        try:
+            df = pd.read_csv(path, encoding='utf-8')
+        except UnicodeDecodeError:
+            df = pd.read_csv(path, encoding='latin1')
 
-        if info_path.exists():
-            try:
-                stadiums_info = pd.read_csv(info_path, encoding='utf-8')
-            except UnicodeDecodeError:
-                stadiums_info = pd.read_csv(info_path, encoding='latin1')
-            stadiums_info.rename(columns={
-                "Stadium": "Stadium",
-                "Capacity": "Capacity",
-                "Country": "Country",
-                "Confederation": "Confederation",
-                "City": "City",
-                "HomeTeams": "Team"
-            }, inplace=True)
+        # Garantir que latitude e longitude sejam numéricos
+        df["latitude"] = pd.to_numeric(df["latitude"], errors="coerce")
+        df["longitude"] = pd.to_numeric(df["longitude"], errors="coerce")
+        df = df.dropna(subset=["latitude", "longitude"])
 
-        if not stadiums_gps.empty and not stadiums_info.empty:
-            stadiums_info["Stadium_clean"] = stadiums_info["Stadium"].str.strip().str.lower()
-            stadiums_gps["Stadium_clean"] = stadiums_gps["Stadium"].str.strip().str.lower()
-            stadiums_gps = stadiums_gps.merge(
-                stadiums_info[["Stadium_clean", "Capacity", "Confederation", "Team"]],
-                on="Stadium_clean",
-                how="left",
-                suffixes=("", "_info")
-            )
-            if "Capacity_info" in stadiums_gps.columns:
-                stadiums_gps["Capacity"] = stadiums_gps["Capacity_info"].fillna(stadiums_gps.get("Capacity", pd.Series()))
-                stadiums_gps.drop(columns=["Capacity_info", "Stadium_clean"], inplace=True)
-            else:
-                stadiums_gps.drop(columns=["Stadium_clean"], inplace=True)
+        # Renomear colunas para padronizar com o restante do app
+        df = df.rename(columns={
+            "stadium": "Stadium",
+            "team": "Team",
+            "league": "League",
+            "country": "Country",
+            "latitude": "Latitude",
+            "longitude": "Longitude"
+        })
 
-        return stadiums_gps
+        return df
 
     df_stadiums = load_stadiums_data()
 
@@ -762,7 +743,7 @@ with tab7:
         if time_sel != "Todos" and "Team" in df_filtrado.columns:
             df_filtrado = df_filtrado[df_filtrado["Team"] == time_sel]
 
-        colunas_exibir = ["Stadium", "City", "Country", "Capacity", "Team"]
+        colunas_exibir = ["Stadium", "Team", "League", "Country"]
         colunas_disponiveis = [c for c in colunas_exibir if c in df_filtrado.columns]
         st.dataframe(
             df_filtrado[colunas_disponiveis],
@@ -772,7 +753,7 @@ with tab7:
         )
         st.caption(f"Mostrando {len(df_filtrado)} estádios de um total de {len(df_stadiums)} com coordenadas.")
     else:
-        st.info("Nenhum dado de estádio com coordenadas disponível. Adicione o arquivo 'futebol_stadiums.csv' na pasta data/")
+        st.info("Nenhum dado de estádio com coordenadas disponível. Adicione o arquivo 'top_1000_stadiums_world.csv' na pasta data/")
 
 # ---------------------------------------------------------------------------
 # FOOTER
