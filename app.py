@@ -26,21 +26,18 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-PRIMARY_BG = "#0d1117"
-PANEL_BG = "#161b22"
-ACCENT = "#d4af37"   # gold
-ACCENT2 = "#4cc9f0"  # cyan accent
-TEXT_MAIN = "#e6edf3"
-TEXT_MUTED = "#8b949e"
-GRID_COLOR = "#21262d"
+# Accent colors that work on both light and dark Streamlit themes
+ACCENT = "#d4af37"    # gold
+ACCENT2 = "#1f77b4"   # blue
+POSITIVE = "#2ca02c"
+NEGATIVE = "#d62728"
 
+# Plotly template that adapts to Streamlit's active theme (no hardcoded bg)
 PLOTLY_TEMPLATE = dict(
     layout=go.Layout(
-        paper_bgcolor=PRIMARY_BG,
-        plot_bgcolor=PRIMARY_BG,
-        font=dict(family="IBM Plex Mono, monospace", color=TEXT_MAIN, size=12),
-        xaxis=dict(gridcolor=GRID_COLOR, zerolinecolor=GRID_COLOR),
-        yaxis=dict(gridcolor=GRID_COLOR, zerolinecolor=GRID_COLOR),
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        font=dict(family="IBM Plex Mono, monospace", size=12),
         colorway=[ACCENT, ACCENT2, "#f72585", "#4ade80", "#fb923c", "#a78bfa"],
         margin=dict(l=40, r=20, t=50, b=40),
         legend=dict(bgcolor="rgba(0,0,0,0)"),
@@ -49,24 +46,63 @@ PLOTLY_TEMPLATE = dict(
 
 st.markdown(f"""
 <style>
-.stApp {{ background-color: {PRIMARY_BG}; }}
-section[data-testid="stSidebar"] {{ background-color: {PANEL_BG}; border-right: 1px solid {GRID_COLOR}; }}
 h1, h2, h3 {{ font-family: 'IBM Plex Mono', monospace; letter-spacing: 0.5px; }}
-h1 {{ color: {ACCENT} !important; border-bottom: 1px solid {GRID_COLOR}; padding-bottom: 12px; }}
-h2, h3 {{ color: {TEXT_MAIN} !important; }}
-[data-testid="stMetricValue"] {{ color: {ACCENT}; font-family: 'IBM Plex Mono', monospace; }}
-[data-testid="stMetricLabel"] {{ color: {TEXT_MUTED}; }}
-.stTabs [data-baseweb="tab"] {{ font-family: 'IBM Plex Mono', monospace; color: {TEXT_MUTED}; }}
-.stTabs [aria-selected="true"] {{ color: {ACCENT} !important; }}
+h1 {{ color: {ACCENT} !important; border-bottom: 2px solid {ACCENT}; padding-bottom: 12px; }}
+[data-testid="stMetricValue"] {{ font-family: 'IBM Plex Mono', monospace; }}
+.stTabs [data-baseweb="tab"] {{ font-family: 'IBM Plex Mono', monospace; font-size: 0.95rem; }}
+.stTabs [aria-selected="true"] {{ color: {ACCENT} !important; border-bottom-color: {ACCENT} !important; }}
 .block-container {{ padding-top: 1.5rem; }}
-[data-testid="stDataFrame"] {{ border: 1px solid {GRID_COLOR}; }}
 .caption-box {{
-    background-color: {PANEL_BG}; border-left: 3px solid {ACCENT};
-    padding: 0.6rem 1rem; font-size: 0.85rem; color: {TEXT_MUTED};
+    border-left: 3px solid {ACCENT};
+    padding: 0.6rem 1rem; font-size: 0.85rem; opacity: 0.85;
     font-family: 'IBM Plex Mono', monospace; margin-bottom: 1rem;
 }}
+.tier-badge {{
+    display: inline-block; padding: 2px 10px; border-radius: 4px;
+    font-family: 'IBM Plex Mono', monospace; font-size: 0.75rem; font-weight: 600;
+    border: 1px solid {ACCENT}; color: {ACCENT};
+}}
+.form-pill {{
+    display: inline-block; width: 22px; height: 22px; line-height: 22px;
+    text-align: center; border-radius: 50%; font-size: 0.7rem; font-weight: 700;
+    font-family: 'IBM Plex Mono', monospace; color: white; margin-right: 3px;
+}}
+.form-w {{ background-color: {POSITIVE}; }}
+.form-d {{ background-color: #888; }}
+.form-l {{ background-color: {NEGATIVE}; }}
 </style>
 """, unsafe_allow_html=True)
+
+
+def elo_tier(elo):
+    if elo >= 1900:
+        return "ELITE", ACCENT
+    elif elo >= 1750:
+        return "TOP CONTENDER", ACCENT2
+    elif elo >= 1600:
+        return "COMPETITIVE", POSITIVE
+    elif elo >= 1450:
+        return "DEVELOPING", "#888"
+    else:
+        return "EMERGING", NEGATIVE
+
+
+def form_pills_html(results_df, team, n=5):
+    """Build last-N form pills (W/D/L) for a team, most recent first."""
+    sub = results_df[(results_df["home_team"] == team) | (results_df["away_team"] == team)].sort_values("date", ascending=False).head(n)
+    html = ""
+    for _, r in sub.iterrows():
+        is_home = r["home_team"] == team
+        gf = r["home_score"] if is_home else r["away_score"]
+        ga = r["away_score"] if is_home else r["home_score"]
+        if gf > ga:
+            cls, letter = "form-w", "V"
+        elif gf < ga:
+            cls, letter = "form-l", "D"
+        else:
+            cls, letter = "form-d", "E"
+        html += f'<span class="form-pill {cls}">{letter}</span>'
+    return html if html else "<i>sem jogos recentes</i>"
 
 
 # ---------------------------------------------------------------------------
@@ -140,7 +176,7 @@ with tab1:
     col_a, col_b = st.columns([1, 2])
 
     ranking_df = pd.DataFrame(
-        [{"Seleção": k, "Elo": round(v, 1)} for k, v in CURRENT_RATINGS.items()]
+        [{"Seleção": k, "Elo": round(v, 1), "Tier": elo_tier(v)[0]} for k, v in CURRENT_RATINGS.items()]
     ).sort_values("Elo", ascending=False).reset_index(drop=True)
     ranking_df.index += 1
     ranking_df.index.name = "Rank"
@@ -152,6 +188,11 @@ with tab1:
             ranking_df.head(top_n),
             use_container_width=True,
             height=600,
+            column_config={
+                "Elo": st.column_config.ProgressColumn(
+                    "Elo", min_value=1300, max_value=2100, format="%.0f"
+                ),
+            },
         )
 
     with col_b:
@@ -238,7 +279,26 @@ with tab2:
         m4.metric(f"Gols {team_a}", int(goals_a))
         m5.metric(f"Gols {team_b}", int(goals_b))
 
-        st.markdown(f"**Elo atual** — {team_a}: `{CURRENT_RATINGS.get(team_a, INITIAL_ELO):.1f}` &nbsp;|&nbsp; {team_b}: `{CURRENT_RATINGS.get(team_b, INITIAL_ELO):.1f}`")
+        elo_a_val = CURRENT_RATINGS.get(team_a, INITIAL_ELO)
+        elo_b_val = CURRENT_RATINGS.get(team_b, INITIAL_ELO)
+        tier_a, color_a = elo_tier(elo_a_val)
+        tier_b, color_b = elo_tier(elo_b_val)
+
+        cforma, cformb = st.columns(2)
+        with cforma:
+            st.markdown(
+                f"**{team_a}** — Elo `{elo_a_val:.1f}` "
+                f'<span class="tier-badge" style="border-color:{color_a};color:{color_a};">{tier_a}</span><br>'
+                f"Forma recente: {form_pills_html(RESULTS, team_a)}",
+                unsafe_allow_html=True
+            )
+        with cformb:
+            st.markdown(
+                f"**{team_b}** — Elo `{elo_b_val:.1f}` "
+                f'<span class="tier-badge" style="border-color:{color_b};color:{color_b};">{tier_b}</span><br>'
+                f"Forma recente: {form_pills_html(RESULTS, team_b)}",
+                unsafe_allow_html=True
+            )
 
         # Pizza de resultados + linha temporal de gols
         col1, col2 = st.columns([1, 2])
@@ -247,7 +307,7 @@ with tab2:
                 labels=[f"{team_a}", "Empate", f"{team_b}"],
                 values=[wins_a, draws, wins_b],
                 hole=0.5,
-                marker=dict(colors=[ACCENT, GRID_COLOR, ACCENT2]),
+                marker=dict(colors=[ACCENT, "#999999", ACCENT2]),
             )])
             pie.update_layout(template=PLOTLY_TEMPLATE, title="Distribuição de Resultados", height=350)
             st.plotly_chart(pie, use_container_width=True)
@@ -259,7 +319,7 @@ with tab2:
                 else (r["away_score"] - r["home_score"]), axis=1
             )
             bar = go.Figure()
-            colors = [ACCENT if v > 0 else (ACCENT2 if v < 0 else GRID_COLOR) for v in h2h_sorted["goal_diff"]]
+            colors = [ACCENT if v > 0 else (ACCENT2 if v < 0 else "#999999") for v in h2h_sorted["goal_diff"]]
             bar.add_trace(go.Bar(x=h2h_sorted["date"], y=h2h_sorted["goal_diff"], marker_color=colors))
             bar.update_layout(template=PLOTLY_TEMPLATE, title=f"Saldo de Gols por Confronto (perspectiva {team_a})", height=350,
                                yaxis_title="Saldo de gols")
@@ -330,6 +390,28 @@ with tab3:
         m2.metric("Empate", f"{result['p_draw']*100:.1f}%")
         m3.metric(f"Vitória {away_pred}", f"{result['p_away_win']*100:.1f}%")
 
+        # Stacked probability gauge
+        gauge = go.Figure()
+        gauge.add_trace(go.Bar(
+            x=[result["p_home_win"]*100], y=["Probabilidade"], orientation="h",
+            name=home_pred, marker_color=ACCENT, text=f"{result['p_home_win']*100:.0f}%", textposition="inside",
+        ))
+        gauge.add_trace(go.Bar(
+            x=[result["p_draw"]*100], y=["Probabilidade"], orientation="h",
+            name="Empate", marker_color="#888", text=f"{result['p_draw']*100:.0f}%", textposition="inside",
+        ))
+        gauge.add_trace(go.Bar(
+            x=[result["p_away_win"]*100], y=["Probabilidade"], orientation="h",
+            name=away_pred, marker_color=ACCENT2, text=f"{result['p_away_win']*100:.0f}%", textposition="inside",
+        ))
+        gauge.update_layout(
+            template=PLOTLY_TEMPLATE, barmode="stack", height=120,
+            showlegend=True, xaxis=dict(range=[0, 100], showticklabels=False),
+            yaxis=dict(showticklabels=False), margin=dict(l=10, r=10, t=10, b=10),
+            legend=dict(orientation="h", yanchor="bottom", y=1.05),
+        )
+        st.plotly_chart(gauge, use_container_width=True)
+
         m4, m5, m6 = st.columns(3)
         m4.metric(f"λ gols {home_pred}", f"{result['lambda_home']:.2f}")
         m5.metric(f"λ gols {away_pred}", f"{result['lambda_away']:.2f}")
@@ -342,7 +424,7 @@ with tab3:
         sm = result["score_matrix"][:max_g+1, :max_g+1]
         heat = go.Figure(data=go.Heatmap(
             z=sm, x=[str(i) for i in range(max_g+1)], y=[str(i) for i in range(max_g+1)],
-            colorscale=[[0, PRIMARY_BG], [1, ACCENT]],
+            colorscale="YlOrRd",
             text=np.round(sm*100, 1), texttemplate="%{text}%",
             hoverongaps=False,
         ))
@@ -394,7 +476,7 @@ with tab4:
     """)
 
 st.markdown(
-    f'<div style="text-align:center; color:{TEXT_MUTED}; font-size:0.75rem; margin-top:2rem; '
+    f'<div style="text-align:center; font-size:0.75rem; opacity:0.6; margin-top:2rem; '
     f'font-family:\'IBM Plex Mono\',monospace;">EDUMETRIA RESEARCH — Quantitative Football Analytics</div>',
     unsafe_allow_html=True
 )
