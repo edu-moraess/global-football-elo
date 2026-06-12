@@ -666,14 +666,12 @@ with tab6:
     - Dados de **jogadores, clubes, transferências e valuation** fornecidos pelo Kaggle.
     - Curva de valorização por idade, maiores transferências, fluxo financeiro entre ligas, distribuição de nacionalidades e resumo financeiro dos clubes.
 
-    ### 🗺️ **Estádios e Técnicos**
+    ### 🗺️ **Estádios**
     - Estádios com coordenadas geográficas para visualização em mapa.
-    - Dados de técnicos provenientes do **Reep (people.csv)** – mais de 700 mil registros, filtrados para `type == 'coach'`.
 
     ### 📂 **Fontes**
     - Partidas internacionais: [Football Results (1872-2024)](https://www.kaggle.com/datasets/martj42/international-football-results-from-1872-to-2017)
     - Dados de mercado: [Transfermarkt Dataset](https://www.kaggle.com/datasets/davidcariboo/player-scores)
-    - Técnicos: [Reep - Football Entity Register](https://github.com/withqwerty/reep)
     - Estádios: WorldSoccerStadiums + Football Stadiums (Kaggle)
     - Processamento e visualização: **Python, Pandas, Plotly, Streamlit**.
 
@@ -684,14 +682,11 @@ with tab6:
 
 
 # ---------------------------------------------------------------------------
-# TAB 7 — ESTÁDIOS & TÉCNICOS
+# TAB 7 — ESTÁDIOS
 # ---------------------------------------------------------------------------
 with tab7:
     st.subheader("🗺️ Mapa Mundial de Estádios")
 
-    # ------------------------------
-    # 1. Carregar dados de estádios
-    # ------------------------------
     @st.cache_data
     def load_stadiums_data():
         gps_path = Path("data/futebol_stadiums.csv")
@@ -778,112 +773,6 @@ with tab7:
         st.caption(f"Mostrando {len(df_filtrado)} estádios de um total de {len(df_stadiums)} com coordenadas.")
     else:
         st.info("Nenhum dado de estádio com coordenadas disponível. Adicione o arquivo 'futebol_stadiums.csv' na pasta data/")
-
-    # -----------------------------------------------------------------------
-    # 2. Dados de Técnicos (Reep - suporte a N partes people_parte*.csv)
-    # -----------------------------------------------------------------------
-    st.markdown("---")
-    st.subheader("🧑‍🏫 Dados de Técnicos (Reep)")
-
-    @st.cache_data
-    def load_coaches_data():
-        data_dir = Path("data")
-        parte_files = sorted(data_dir.glob("people_parte*.csv"))
-        original_file = data_dir / "people.csv"
-
-        if parte_files:
-            dfs = []
-            for file in parte_files:
-                try:
-                    df_part = pd.read_csv(file, encoding='utf-8')
-                except UnicodeDecodeError:
-                    df_part = pd.read_csv(file, encoding='latin1')
-                dfs.append(df_part)
-                st.info(f"📂 Carregado: {file.name} ({len(df_part):,} linhas)")
-            df_full = pd.concat(dfs, ignore_index=True)
-            st.success(f"✅ Total carregado das {len(parte_files)} partes: {len(df_full):,} registros.")
-        elif original_file.exists():
-            try:
-                df_full = pd.read_csv(original_file, sep=';', encoding='utf-8')
-            except UnicodeDecodeError:
-                df_full = pd.read_csv(original_file, sep=';', encoding='latin1')
-            st.success(f"✅ Carregado arquivo original: {len(df_full):,} registros.")
-        else:
-            st.warning("Nenhum arquivo de técnicos encontrado (people_parte*.csv ou people.csv).")
-            return pd.DataFrame()
-
-        # Limpa espaços em branco dos nomes das colunas
-        df_full.columns = df_full.columns.str.strip()
-
-        # Procura coluna 'type' de forma case-insensitive
-        type_col = None
-        for col in df_full.columns:
-            if col.lower() == 'type':
-                type_col = col
-                break
-
-        if type_col:
-            df_coaches = df_full[df_full[type_col] == 'coach'].copy()
-            st.caption(f"🎯 Filtrados {len(df_coaches):,} técnicos (type='coach').")
-        else:
-            df_coaches = df_full.copy()
-            st.caption("Coluna 'type' não encontrada. Exibindo todos os registros.")
-
-        return df_coaches
-
-    df_coaches = load_coaches_data()
-
-    if not df_coaches.empty:
-        colunas_coach = df_coaches.columns.tolist()
-        st.caption(f"📋 Colunas disponíveis: {', '.join(colunas_coach[:8])} ...")
-
-        # Gráfico de nacionalidades
-        if 'nationality' in colunas_coach:
-            top_nats = df_coaches['nationality'].value_counts().head(10).reset_index()
-            top_nats.columns = ['Nacionalidade', 'Quantidade']
-            fig = px.bar(top_nats, x='Quantidade', y='Nacionalidade', orientation='h',
-                         title='Técnicos por nacionalidade', color_discrete_sequence=[ACCENT])
-            st.plotly_chart(fig, use_container_width=True)
-        elif 'country_of_birth' in colunas_coach:
-            top_nats = df_coaches['country_of_birth'].value_counts().head(10).reset_index()
-            top_nats.columns = ['País', 'Quantidade']
-            fig = px.bar(top_nats, x='Quantidade', y='País', orientation='h',
-                         title='Técnicos por país de nascimento', color_discrete_sequence=[ACCENT])
-            st.plotly_chart(fig, use_container_width=True)
-        elif 'country' in colunas_coach:
-            top_nats = df_coaches['country'].value_counts().head(10).reset_index()
-            top_nats.columns = ['País', 'Quantidade']
-            fig = px.bar(top_nats, x='Quantidade', y='País', orientation='h',
-                         title='Técnicos por país', color_discrete_sequence=[ACCENT])
-            st.plotly_chart(fig, use_container_width=True)
-
-        # Filtro por país
-        coluna_pais = None
-        if 'country' in colunas_coach:
-            coluna_pais = 'country'
-        elif 'country_of_birth' in colunas_coach:
-            coluna_pais = 'country_of_birth'
-        elif 'nationality' in colunas_coach:
-            coluna_pais = 'nationality'
-
-        if coluna_pais:
-            paises_coach = sorted(df_coaches[coluna_pais].dropna().unique())
-            pais_coach_sel = st.selectbox("Filtrar técnicos por país", ["Todos"] + paises_coach)
-            if pais_coach_sel != "Todos":
-                df_coaches = df_coaches[df_coaches[coluna_pais] == pais_coach_sel]
-
-        # Exibir tabela
-        colunas_exibir_coach = []
-        for col in ['name', 'full_name', 'date_of_birth', 'age', 'nationality', 'country', 'country_of_birth', 'position']:
-            if col in df_coaches.columns:
-                colunas_exibir_coach.append(col)
-        if not colunas_exibir_coach:
-            colunas_exibir_coach = df_coaches.columns[:5]
-
-        st.markdown("**📋 Tabela de técnicos (primeiras 100 linhas)**")
-        st.dataframe(df_coaches[colunas_exibir_coach].head(100), use_container_width=True, hide_index=True)
-    else:
-        st.info("📂 Nenhum dado de técnicos carregado. Coloque os arquivos na pasta data/")
 
 # ---------------------------------------------------------------------------
 # FOOTER
