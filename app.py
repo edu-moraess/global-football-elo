@@ -1,17 +1,21 @@
-# app.py - Global Football Intelligence (versão unificada, sem dependência externa)
+# app.py - Global Football Intelligence (completo)
+# Elo + Poisson alinhados com janela deslizante (últimos 10 anos)
+# Inclui: evolução Elo, distribuição de gols, matriz de placares, head-to-head, forças, etc.
+
 import streamlit as st
 import pandas as pd
 import numpy as np
 from scipy.stats import poisson
 from datetime import datetime, timedelta
 import plotly.graph_objects as go
+import plotly.express as px
 
-# ================= CONFIGURAÇÕES =================
+# ================= CONFIGURAÇÕES GLOBAIS =================
 LOOKBACK_YEARS = 10          # Mesma janela para Elo e Poisson
-HOME_FACTOR_ATTACK = 1.2     # Ajuste de casa no ataque (Poisson)
-HOME_FACTOR_DEFENSE = 0.9    # Ajuste de casa na defesa (Poisson)
+HOME_FACTOR_ATTACK = 1.2     # Vantagem de casa no ataque (Poisson)
+HOME_FACTOR_DEFENSE = 0.9    # Vantagem de casa na defesa (Poisson)
 
-# Configurações do Elo (incorporadas diretamente aqui)
+# Configurações do Elo
 INITIAL_ELO = 1500
 K_FACTOR_BASE = 32
 ELO_SCALE = 400
@@ -48,16 +52,22 @@ def expected_score(rating_a, rating_b, neutral=False):
     return 1.0 / (1.0 + 10 ** (diff / ELO_SCALE))
 
 def compute_elo_history(df, lookback_years=10):
+    """
+    Retorna (ratings_finais, DataFrame_historico)
+    ratings_finais: dict {team: rating}
+    historico: colunas date, home_team, away_team, home_rating_after, away_rating_after
+    """
     df = df.copy()
     df['date'] = pd.to_datetime(df['date'])
     df = df.sort_values('date')
     
     if lookback_years is not None:
-        cutoff = df['date'].max() - timedelta(days=365*lookback_years)
+        cutoff = df['date'].max() - timedelta(days=365 * lookback_years)
         df = df[df['date'] >= cutoff]
     
     teams = set(df['home_team']).union(set(df['away_team']))
     ratings = {team: INITIAL_ELO for team in teams}
+    history = []
     
     for _, row in df.iterrows():
         home, away = row['home_team'], row['away_team']
@@ -82,12 +92,21 @@ def compute_elo_history(df, lookback_years=10):
         
         ratings[home] = r_home + k * (res_home - exp_home)
         ratings[away] = r_away + k * (res_away - exp_away)
+        
+        history.append({
+            'date': row['date'],
+            'home_team': home,
+            'away_team': away,
+            'home_rating_after': ratings[home],
+            'away_rating_after': ratings[away],
+        })
     
-    return ratings
+    return ratings, pd.DataFrame(history)
 
 # ================= FUNÇÕES DO POISSON =================
 def get_poisson_strengths(df, lookback_years):
-    cutoff = df['date'].max() - timedelta(days=365*lookback_years)
+    """Retorna attack, defense, league_avg (todos Series indexados por time)"""
+    cutoff = df['date'].max() - timedelta(days=365 * lookback_years)
     df_filtered = df[df['date'] >= cutoff]
     
     home_goals = df_filtered.groupby('home_team')['home_score'].sum()
@@ -134,105 +153,186 @@ def predict_poisson(home, away, neutral, attack, defense, league_avg):
     return lambda_home, lambda_away, p_home_win, p_draw, p_away_win, prob_matrix
 
 # ================= CARREGAMENTO DE DADOS =================
-@st.cache_data
+@st.cache_data(ttl=3600)
 def load_data():
     try:
         df = pd.read_csv("data/results.csv")
     except FileNotFoundError:
-        # Fallback: cria dados de exemplo para demonstração
         st.error("Arquivo 'data/results.csv' não encontrado. Usando dados de exemplo limitados.")
-        data = {
-            'date': pd.date_range('2015-01-01', periods=1000),
-            'home_team': np.random.choice(['Brazil', 'Argentina', 'Germany', 'France', 'Italy'], 1000),
-            'away_team': np.random.choice(['Uruguay', 'England', 'Spain', 'Netherlands', 'Portugal'], 1000),
-            'home_score': np.random.poisson(1.5, 1000),
-            'away_score': np.random.poisson(1.2, 1000),
-            'tournament': ['Friendly'] * 1000,
-            'neutral': [False] * 1000
-        }
+        # Dados sintéticos para demonstração
+        np.random.seed(42)
+        dates = pd.date_range('2015-01-01', periods=1500, freq='D')
+        teams = ['Brazil', 'Argentina', 'Germany', 'France', 'Italy', 'England', 'Spain', 'Netherlands', 'Portugal', 'Uruguay']
+        data = []
+        for i in range(1500):
+            home = np.random.choice(teams)
+            away = np.random.choice([t for t in teams if t != home])
+            data.append({
+                'date': dates[i],
+                'home_team': home,
+                'away_team': away,
+                'home_score': np.random.poisson(1.3),
+                'away_score': np.random.poisson(1.1),
+                'tournament': np.random.choice(['Friendly', 'FIFA World Cup', 'UEFA Euro', 'Copa América'], p=[0.6,0.2,0.1,0.1]),
+                'neutral': np.random.choice([True, False], p=[0.3,0.7])
+            })
         df = pd.DataFrame(data)
     df['date'] = pd.to_datetime(df['date'])
     if 'neutral' not in df.columns:
         df['neutral'] = False
     return df
 
-# ================= INTERFACE STREAMLIT =================
+# ================= INTERFACE PRINCIPAL =================
 st.set_page_config(page_title="Global Football Intelligence", layout="wide")
 st.title("🌍 Global Football Intelligence")
-st.markdown(f"*Base histórica: últimos {LOOKBACK_YEARS} anos | Elo e Poisson alinhados*")
+st.markdown(f"**Base histórica:** últimos {LOOKBACK_YEARS} anos | **Elo + Poisson** alinhados | *{len(load_data()):,} partidas*")
 
 df = load_data()
 teams = sorted(set(df['home_team']).union(set(df['away_team'])))
 
+# Seleção de times
 col1, col2, col3 = st.columns(3)
 with col1:
-    home_team = st.selectbox("Seleção da casa", teams)
+    home_team = st.selectbox("Seleção da casa", teams, index=teams.index("Brazil") if "Brazil" in teams else 0)
 with col2:
-    away_team = st.selectbox("Seleção visitante", teams)
+    away_team = st.selectbox("Seleção visitante", teams, index=teams.index("Argentina") if "Argentina" in teams else 1)
 with col3:
     neutral = st.checkbox("Campo neutro", value=False)
 
-if st.button("🔮 Predizer", type="primary"):
-    with st.spinner("Calculando..."):
-        # Elo
-        elo_ratings = compute_elo_history(df, lookback_years=LOOKBACK_YEARS)
+# Botão de predição
+if st.button("🔮 Predizer", type="primary", use_container_width=True):
+    with st.spinner("Calculando Elo e Poisson..."):
+        # ========== ELO ==========
+        elo_ratings, elo_history = compute_elo_history(df, lookback_years=LOOKBACK_YEARS)
         elo_home = elo_ratings.get(home_team, INITIAL_ELO)
         elo_away = elo_ratings.get(away_team, INITIAL_ELO)
         prob_elo_home = expected_score(elo_home, elo_away, neutral=neutral)
         
-        # Poisson
+        # ========== POISSON ==========
         attack, defense, league_avg = get_poisson_strengths(df, LOOKBACK_YEARS)
         l_home, l_away, p_home, p_draw, p_away, prob_matrix = predict_poisson(
             home_team, away_team, neutral, attack, defense, league_avg
         )
         
-        # Exibição dos resultados
-        col_a, col_b = st.columns(2)
+        # ========== HEAD-TO-HEAD (últimos 10 anos) ==========
+        cutoff = df['date'].max() - timedelta(days=365*LOOKBACK_YEARS)
+        h2h = df[(df['date'] >= cutoff) & 
+                 (((df['home_team'] == home_team) & (df['away_team'] == away_team)) |
+                  ((df['home_team'] == away_team) & (df['away_team'] == home_team)))]
+        h2h_home_wins = len(h2h[(h2h['home_team'] == home_team) & (h2h['home_score'] > h2h['away_score'])])
+        h2h_away_wins = len(h2h[(h2h['away_team'] == home_team) & (h2h['away_score'] > h2h['home_score'])])
+        h2h_draws = len(h2h[h2h['home_score'] == h2h['away_score']])
+        
+        # ========== EXIBIÇÃO ==========
+        # Linha 1: Cards de resumo
+        st.subheader("📈 Resumo da Predição")
+        col_a, col_b, col_c, col_d = st.columns(4)
         with col_a:
-            st.subheader("📊 Poisson Bivariado")
             st.metric(f"λ {home_team}", f"{l_home:.2f}")
-            st.metric(f"λ {away_team}", f"{l_away:.2f}")
-            st.write(f"**Vitória {home_team}:** {p_home:.1%}")
-            st.write(f"**Empate:** {p_draw:.1%}")
-            st.write(f"**Vitória {away_team}:** {p_away:.1%}")
-        
         with col_b:
-            st.subheader("🏆 Elo (referência)")
-            st.metric(f"{home_team} (Elo)", f"{elo_home:.0f}")
-            st.metric(f"{away_team} (Elo)", f"{elo_away:.0f}")
-            st.write(f"**Probabilidade Elo:** {home_team} {prob_elo_home:.1%} — {away_team} {1-prob_elo_home:.1%}")
+            st.metric(f"λ {away_team}", f"{l_away:.2f}")
+        with col_c:
+            st.metric(f"Elo {home_team}", f"{elo_home:.0f}")
+        with col_d:
+            st.metric(f"Elo {away_team}", f"{elo_away:.0f}")
+        
+        # Linha 2: Probabilidades lado a lado
+        col_e, col_f = st.columns(2)
+        with col_e:
+            st.markdown("#### 🧠 Poisson Bivariado")
+            st.write(f"**{home_team} vence:** {p_home:.1%}")
+            st.write(f"**Empate:** {p_draw:.1%}")
+            st.write(f"**{away_team} vence:** {p_away:.1%}")
+        with col_f:
+            st.markdown("#### 🏆 Elo (referência)")
+            st.write(f"**{home_team} vence:** {prob_elo_home:.1%}")
+            st.write(f"**{away_team} vence:** {1-prob_elo_home:.1%}")
             if abs(prob_elo_home - p_home) > 0.1:
-                st.warning("⚠️ Elo e Poisson mostram favoritos diferentes – provável devido a tendências recentes não capturadas pelo Elo.")
+                st.warning("⚠️ Divergência >10% entre Elo e Poisson – provável efeito de forma recente.")
         
-        st.subheader("⚽ Placares mais prováveis")
-        scores = []
-        for i in range(min(6, prob_matrix.shape[0])):
-            for j in range(min(6, prob_matrix.shape[1])):
-                prob = prob_matrix[i, j]
-                if prob > 0.005:
-                    scores.append((f"{i}×{j}", prob))
-        scores.sort(key=lambda x: -x[1])
-        top10 = scores[:10]
-        st.table(pd.DataFrame(top10, columns=["Placar", "Probabilidade"]).assign(Probabilidade=lambda x: x["Probabilidade"].apply(lambda p: f"{p:.1%}")))
+        # Linha 3: Forças ofensivas/defensivas
+        st.subheader("⚔️ Forças Relativas (últimos 10 anos)")
+        attack_home = attack.get(home_team, 1.0)
+        attack_away = attack.get(away_team, 1.0)
+        defense_home = defense.get(home_team, 1.0)
+        defense_away = defense.get(away_team, 1.0)
+        col_g, col_h = st.columns(2)
+        with col_g:
+            st.write(f"**Ataque** {home_team}: {attack_home:.2f} (média = 1.0)")
+            st.write(f"**Defesa** {home_team}: {defense_home:.2f} (menos é melhor)")
+        with col_h:
+            st.write(f"**Ataque** {away_team}: {attack_away:.2f}")
+            st.write(f"**Defesa** {away_team}: {defense_away:.2f}")
         
+        # Linha 4: Head-to-head recente
+        if not h2h.empty:
+            st.subheader("📋 Confrontos Diretos (últimos 10 anos)")
+            st.write(f"{home_team} venceu {h2h_home_wins}x, {away_team} venceu {h2h_away_wins}x, empates {h2h_draws}x (total {len(h2h)} jogos)")
+        
+        # Linha 5: Matriz de placares + top 10
+        st.subheader("⚽ Matriz de Probabilidade de Placar")
         # Heatmap
-        st.subheader("🌡️ Matriz de Probabilidades (6×6)")
-        fig = go.Figure(data=go.Heatmap(
-            z=prob_matrix[:6, :6],
-            x=[str(j) for j in range(6)],
-            y=[str(i) for i in range(6)],
+        fig_heatmap = go.Figure(data=go.Heatmap(
+            z=prob_matrix[:7, :7],
+            x=[str(i) for i in range(7)],
+            y=[str(i) for i in range(7)],
             colorscale="Viridis",
-            text=np.round(prob_matrix[:6, :6], 3),
+            text=np.round(prob_matrix[:7, :7], 3),
             texttemplate='%{text:.1%}',
-            textfont={"size": 10}
+            textfont={"size": 9}
         ))
-        fig.update_layout(
+        fig_heatmap.update_layout(
             title=f"Placar ({home_team} × {away_team})",
             xaxis_title=f"Gols {away_team}",
             yaxis_title=f"Gols {home_team}",
-            width=600, height=500
+            width=500, height=500
         )
-        st.plotly_chart(fig)
+        st.plotly_chart(fig_heatmap, use_container_width=True)
         
-        st.caption(f"Nota: Ambos os modelos usam dados dos últimos {LOOKBACK_YEARS} anos. "
-                   f"Fator casa no Poisson: ataque×{HOME_FACTOR_ATTACK}, defesa×{HOME_FACTOR_DEFENSE}.")
+        # Tabela top 10 placares
+        scores = [(f"{i}×{j}", prob_matrix[i, j]) for i in range(8) for j in range(8) if prob_matrix[i, j] > 0.005]
+        scores.sort(key=lambda x: -x[1])
+        st.subheader("🏅 10 placares mais prováveis")
+        st.table(pd.DataFrame(scores[:10], columns=["Placar", "Probabilidade"]).assign(Probabilidade=lambda x: x["Probabilidade"].apply(lambda p: f"{p:.1%}")))
+        
+        # Linha 6: Evolução do Elo (gráfico)
+        st.subheader("📈 Evolução do Rating Elo (últimos 10 anos)")
+        # Extrair histórico dos dois times
+        hist_home = elo_history[(elo_history['home_team'] == home_team) | (elo_history['away_team'] == home_team)].copy()
+        hist_away = elo_history[(elo_history['home_team'] == away_team) | (elo_history['away_team'] == away_team)].copy()
+        
+        def get_rating_series(hist, team):
+            ratings = []
+            for _, row in hist.iterrows():
+                if row['home_team'] == team:
+                    ratings.append((row['date'], row['home_rating_after']))
+                else:
+                    ratings.append((row['date'], row['away_rating_after']))
+            return pd.DataFrame(ratings, columns=['date', 'rating']).drop_duplicates(subset='date', keep='last')
+        
+        if not hist_home.empty:
+            df_home = get_rating_series(hist_home, home_team)
+            df_away = get_rating_series(hist_away, away_team)
+            fig_elo = go.Figure()
+            fig_elo.add_trace(go.Scatter(x=df_home['date'], y=df_home['rating'], mode='lines', name=home_team))
+            fig_elo.add_trace(go.Scatter(x=df_away['date'], y=df_away['rating'], mode='lines', name=away_team))
+            fig_elo.update_layout(title="Evolução do Elo", xaxis_title="Data", yaxis_title="Rating", height=400)
+            st.plotly_chart(fig_elo, use_container_width=True)
+        else:
+            st.info("Histórico insuficiente para mostrar evolução do Elo.")
+        
+        # Linha 7: Distribuição de gols esperados (Poisson)
+        st.subheader("📊 Distribuição de Gols Esperados")
+        goals = np.arange(0, 6)
+        prob_home_goals = poisson.pmf(goals, l_home)
+        prob_away_goals = poisson.pmf(goals, l_away)
+        fig_dist = go.Figure()
+        fig_dist.add_trace(go.Bar(x=goals, y=prob_home_goals, name=home_team, marker_color='blue'))
+        fig_dist.add_trace(go.Bar(x=goals, y=prob_away_goals, name=away_team, marker_color='red'))
+        fig_dist.update_layout(barmode='group', title="Probabilidade de número de gols", xaxis_title="Gols", yaxis_title="Probabilidade", height=400)
+        st.plotly_chart(fig_dist, use_container_width=True)
+        
+        # Rodapé técnico
+        st.caption(f"Modelos calibrados com dados de {LOOKBACK_YEARS} anos. Fator casa no Poisson: ataque×{HOME_FACTOR_ATTACK}, defesa×{HOME_FACTOR_DEFENSE}.")
+else:
+    st.info("👈 Selecione dois times e clique em 'Predizer' para ver a análise completa.")
