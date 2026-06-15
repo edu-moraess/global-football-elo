@@ -1,17 +1,13 @@
-# elo_engine.py
-# Versão com janela deslizante (lookback_years) e preservando as funções esperadas pelo app.py
-
+# elo_engine.py - Versão final com janela deslizante e compatibilidade total
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
 
-# ================= CONFIGURAÇÕES =================
 INITIAL_ELO = 1500
 K_FACTOR_BASE = 32
 ELO_SCALE = 400
 HOME_ADVANTAGE = 50
 
-# Pesos por competição (multiplicam o K)
 TOURNAMENT_WEIGHTS = {
     'FIFA World Cup': 60,
     'Copa América': 50,
@@ -27,7 +23,6 @@ TOURNAMENT_WEIGHTS = {
 }
 
 def goal_diff_multiplier(goal_diff):
-    """Multiplicador do K baseado na diferença de gols"""
     if goal_diff == 1:
         return 1.0
     elif goal_diff == 2:
@@ -36,10 +31,6 @@ def goal_diff_multiplier(goal_diff):
         return (11 + goal_diff) / 8.0
 
 def expected_score(rating_a, rating_b, neutral=False):
-    """
-    Probabilidade esperada de vitória do time A (0 a 1)
-    neutral=True: campo neutro (sem bônus de casa)
-    """
     if neutral:
         diff = rating_b - rating_a
     else:
@@ -48,33 +39,29 @@ def expected_score(rating_a, rating_b, neutral=False):
 
 def compute_elo_history(df, lookback_years=10):
     """
-    Calcula rating Elo considerando APENAS os últimos `lookback_years` anos.
-    Retorna: (ratings_dict, history_dataframe)
+    Retorna (ratings_dict, history_df)
+    Se lookback_years = None, usa todo histórico.
     """
     df = df.copy()
     df['date'] = pd.to_datetime(df['date'])
     df = df.sort_values('date')
     
     if lookback_years is not None:
-        cutoff_date = df['date'].max() - timedelta(days=365 * lookback_years)
-        df = df[df['date'] >= cutoff_date].copy()
-        print(f"[Elo] Usando jogos a partir de {cutoff_date.date()} (últimos {lookback_years} anos)")
+        cutoff = df['date'].max() - timedelta(days=365*lookback_years)
+        df = df[df['date'] >= cutoff]
+        print(f"[Elo] Usando dados desde {cutoff.date()} (últimos {lookback_years} anos)")
     
     teams = set(df['home_team']).union(set(df['away_team']))
     ratings = {team: INITIAL_ELO for team in teams}
     history = []
     
     for _, row in df.iterrows():
-        home = row['home_team']
-        away = row['away_team']
-        home_goals = row['home_score']
-        away_goals = row['away_score']
+        home, away = row['home_team'], row['away_team']
+        home_goals, away_goals = row['home_score'], row['away_score']
         tournament = row['tournament']
         neutral = row.get('neutral', False)
         
-        r_home = ratings[home]
-        r_away = ratings[away]
-        
+        r_home, r_away = ratings[home], ratings[away]
         exp_home = expected_score(r_home, r_away, neutral=neutral)
         exp_away = 1 - exp_home
         
@@ -100,8 +87,6 @@ def compute_elo_history(df, lookback_years=10):
             'away_rating_before': r_away,
             'home_rating_after': ratings[home],
             'away_rating_after': ratings[away],
-            'tournament': tournament,
-            'neutral': neutral
         })
     
     return ratings, pd.DataFrame(history)
