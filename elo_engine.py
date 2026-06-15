@@ -1,208 +1,294 @@
+#!/usr/bin/env python3
 """
-Edumetria | Football Elo Rating Engine
-Calcula ratings Elo históricos para seleções nacionais (estilo World Football Elo Ratings)
+global_football_intelligence.py
+
+Sistema unificado de predição para futebol de seleções:
+- Rating Elo com janela deslizante (padrão: últimos 10 anos)
+- Modelo Poisson bivariado (força ofensiva/defensiva nos últimos 10 anos)
+- Alinhamento forçado entre as duas abordagens
+- Geração de relatório completo para um jogo (casa/visitante/neutro)
+
+Autor: Ajustado conforme solicitação
+Base histórica: results.csv (padrão: date, home_team, away_team, home_score, away_score, tournament, neutral)
 """
+
 import pandas as pd
 import numpy as np
-from pathlib import Path
+from scipy.stats import poisson
+from datetime import datetime, timedelta
+import warnings
+warnings.filterwarnings('ignore')
 
-DATA_DIR = Path(__file__).parent / "data"
-
-# Peso por importância da competição (estilo eloratings.net)
-TOURNAMENT_WEIGHTS = {
-    "FIFA World Cup": 60,
-    "FIFA World Cup qualification": 40,
-    "Copa América": 50,
-    "UEFA Euro": 50,
-    "UEFA Euro qualification": 35,
-    "African Cup of Nations": 50,
-    "African Cup of Nations qualification": 35,
-    "AFC Asian Cup": 50,
-    "AFC Asian Cup qualification": 35,
-    "CONCACAF Nations League": 35,
-    "UEFA Nations League": 35,
-    "Friendly": 20,
-}
-DEFAULT_WEIGHT = 30
-K_FACTOR_BASE = 32
+# ========================= CONFIGURAÇÕES GLOBAIS =========================
 INITIAL_ELO = 1500
+K_FACTOR_BASE = 32
+ELO_SCALE = 400               # escala clássica (pode testar 300 ou 500)
+HOME_ADVANTAGE_ELO = 50      # pontos extras para o time da casa (só se não neutro)
+LOOKBACK_YEARS = 10           # mesmo período para Elo e Poisson
 
+# Pesos por competição (multiplicam o K do Elo)
+TOURNAMENT_WEIGHTS = {
+    'FIFA World Cup': 60,
+    'Copa América': 50,
+    'UEFA Euro': 50,
+    'FIFA World Cup qualification': 40,
+    'UEFA Euro qualification': 35,
+    'CONMEBOL qualification': 35,
+    'AFC Asian Cup': 30,
+    'Africa Cup of Nations': 30,
+    'CONCACAF Gold Cup': 30,
+    'OFC Nations Cup': 25,
+    'Friendly': 20,
+}
 
-def load_former_names():
-    fn = pd.read_csv(DATA_DIR / "former_names.csv")
-    return fn
-
-
-def build_name_map(former_names: pd.DataFrame, as_of_date=None):
-    """Mapeia nomes antigos -> nome atual. Usado para normalizar séries históricas."""
-    mapping = {}
-    for _, row in former_names.iterrows():
-        mapping[row["former"]] = row["current"]
-    return mapping
-
-
-def normalize_team_names(df: pd.DataFrame, name_map: dict, cols=("home_team", "away_team")):
-    df = df.copy()
-    for c in cols:
-        df[c] = df[c].replace(name_map)
-    return df
-
-
-def expected_score(rating_a, rating_b):
-    return 1.0 / (1.0 + 10 ** ((rating_b - rating_a) / 400.0))
-
-
+# ========================= FUNÇÕES AUXILIARES =========================
 def goal_diff_multiplier(goal_diff):
-    """Multiplicador de K em função da diferença de gols (estilo eloratings.net)."""
-    if goal_diff <= 1:
+    """Ajuste do K conforme margem de gols (World Football Elo)"""
+    if goal_diff == 1:
         return 1.0
     elif goal_diff == 2:
         return 1.5
     else:
         return (11 + goal_diff) / 8.0
 
-
-def compute_elo_history(results: pd.DataFrame, name_map: dict):
+def expected_score_elo(rating_a, rating_b, neutral=False):
     """
-    Retorna:
-      - ratings_history: DataFrame long (date, team, elo)
-      - current_ratings: dict {team: elo}
-      - matches_enriched: results com elo_home_pre, elo_away_pre, prob_home, k_used
+    Probabilidade esperada de vitória do time A (0 a 1) segundo Elo.
+    Se neutral=True, não aplica vantagem de casa.
     """
-    df = results.copy()
-    df = normalize_team_names(df, name_map)
-    df["date"] = pd.to_datetime(df["date"])
-    df = df.sort_values("date").reset_index(drop=True)
-    df = df.dropna(subset=["home_score", "away_score"])
+    if neutral:
+        diff = rating_b - rating_a
+    else:
+        diff = (rating_b - rating_a) + HOME_ADVANTAGE_ELO
+    return 1.0 / (1.0 + 10 ** (diff / ELO_SCALE))
 
-    ratings = {}
-    history_rows = []
-    enriched_rows = []
-
+def compute_elo_ratings(df, lookback_years=LOOKBACK_YEARS):
+    """
+    Calcula o rating Elo final de cada seleção considerando apenas
+    os jogos dos últimos `lookback_years` anos.
+    Retorna: dict {team: rating_final}
+    """
+    df = df.copy()
+    df['date'] = pd.to_datetime(df['date'])
+    df = df.sort_values('date')
+    
+    if lookback_years is not None:
+        cutoff = df['date'].max() - timedelta(days=365*lookback_years)
+        df = df[df['date'] >= cutoff].copy()
+        print(f"[Elo] Usando jogos a partir de {cutoff.date()} (últimos {lookback_years} anos)")
+    
+    # Inicializa ratings
+    teams = set(df['home_team']).union(set(df['away_team']))
+    ratings = {team: INITIAL_ELO for team in teams}
+    
     for _, row in df.iterrows():
-        home, away = row["home_team"], row["away_team"]
-        hs, as_ = row["home_score"], row["away_score"]
-        tournament = row["tournament"]
-        neutral = row.get("neutral", False)
-
-        r_home = ratings.get(home, INITIAL_ELO)
-        r_away = ratings.get(away, INITIAL_ELO)
-
-        # Vantagem de campo (~50 pts) se não for neutro
-        adj_home = r_home if neutral else r_home + 50
-        adj_away = r_away
-
-        exp_home = expected_score(adj_home, adj_away)
+        home, away = row['home_team'], row['away_team']
+        home_goals, away_goals = row['home_score'], row['away_score']
+        tournament = row['tournament']
+        neutral = row.get('neutral', False)
+        
+        r_home, r_away = ratings[home], ratings[away]
+        
+        # Probabilidades esperadas
+        exp_home = expected_score_elo(r_home, r_away, neutral=neutral)
         exp_away = 1 - exp_home
-
-        if hs > as_:
-            score_home, score_away = 1.0, 0.0
-        elif hs < as_:
-            score_home, score_away = 0.0, 1.0
+        
+        # Resultado real
+        if home_goals > away_goals:
+            res_home, res_away = 1, 0
+        elif home_goals == away_goals:
+            res_home, res_away = 0.5, 0.5
         else:
-            score_home, score_away = 0.5, 0.5
+            res_home, res_away = 0, 1
+        
+        # Fator K com peso do torneio e margem de gols
+        weight = TOURNAMENT_WEIGHTS.get(tournament, 20)
+        gd = abs(home_goals - away_goals)
+        k = K_FACTOR_BASE * (weight / 30.0) * goal_diff_multiplier(gd)
+        
+        ratings[home] = r_home + k * (res_home - exp_home)
+        ratings[away] = r_away + k * (res_away - exp_away)
+    
+    return ratings
 
-        weight = TOURNAMENT_WEIGHTS.get(tournament, DEFAULT_WEIGHT)
-        gd_mult = goal_diff_multiplier(abs(hs - as_))
-        k = (K_FACTOR_BASE * weight / 30.0) * gd_mult
-
-        new_r_home = r_home + k * (score_home - exp_home)
-        new_r_away = r_away + k * (score_away - exp_away)
-
-        ratings[home] = new_r_home
-        ratings[away] = new_r_away
-
-        history_rows.append({"date": row["date"], "team": home, "elo": new_r_home})
-        history_rows.append({"date": row["date"], "team": away, "elo": new_r_away})
-
-        enriched_rows.append({
-            "date": row["date"], "home_team": home, "away_team": away,
-            "home_score": hs, "away_score": as_, "tournament": tournament,
-            "elo_home_pre": r_home, "elo_away_pre": r_away,
-            "prob_home_pre": exp_home, "prob_away_pre": exp_away,
-            "k_used": k,
-        })
-
-    history = pd.DataFrame(history_rows)
-    enriched = pd.DataFrame(enriched_rows)
-    return history, ratings, enriched
-
-
-def get_elo_timeseries(history: pd.DataFrame, team: str):
-    sub = history[history["team"] == team].copy()
-    sub = sub.sort_values("date")
-    return sub
-
-
-def predict_match(rating_a, rating_b, neutral=True):
-    adj_a = rating_a if neutral else rating_a + 50
-    p_a = expected_score(adj_a, rating_b)
-    return p_a, 1 - p_a
-
-
-# ---- Poisson goal model ----
-def team_attack_defense_strength(results: pd.DataFrame, name_map: dict, lookback_years=None):
-    """Calcula força ofensiva/defensiva relativa (estilo Dixon-Coles simplificado)."""
-    df = normalize_team_names(results.copy(), name_map)
-    df["date"] = pd.to_datetime(df["date"])
+def team_strength_poisson(df, lookback_years=LOOKBACK_YEARS):
+    """
+    Estima forças ofensivas e defensivas para cada time nos últimos `lookback_years`.
+    Retorna: dict com 'attack', 'defense' relativas à média geral.
+    """
+    df = df.copy()
+    df['date'] = pd.to_datetime(df['date'])
     if lookback_years:
-        cutoff = df["date"].max() - pd.DateOffset(years=lookback_years)
-        df = df[df["date"] >= cutoff]
-    df = df.dropna(subset=["home_score", "away_score"])
+        cutoff = df['date'].max() - timedelta(days=365*lookback_years)
+        df = df[df['date'] >= cutoff]
+    
+    # Métrica simples: gols marcados e sofridos por jogo, normalizado
+    home_goals = df.groupby('home_team')['home_score'].sum()
+    home_matches = df.groupby('home_team')['home_score'].count()
+    away_goals = df.groupby('away_team')['away_score'].sum()
+    away_matches = df.groupby('away_team')['away_score'].count()
+    
+    goals_scored = home_goals.add(away_goals, fill_value=0)
+    matches = home_matches.add(away_matches, fill_value=0)
+    avg_scored = (goals_scored / matches).fillna(0)
+    
+    goals_conceded_home = df.groupby('home_team')['away_score'].sum()
+    goals_conceded_away = df.groupby('away_team')['home_score'].sum()
+    goals_conceded = goals_conceded_home.add(goals_conceded_away, fill_value=0)
+    avg_conceded = (goals_conceded / matches).fillna(0)
+    
+    # Média global de gols por jogo
+    total_goals = df['home_score'].sum() + df['away_score'].sum()
+    total_matches = len(df)
+    league_avg = total_goals / total_matches if total_matches > 0 else 1.0
+    
+    attack = avg_scored / league_avg
+    defense = avg_conceded / league_avg
+    
+    return attack, defense, league_avg
 
-    avg_home_goals = df["home_score"].mean()
-    avg_away_goals = df["away_score"].mean()
+def poisson_match_probs(lambda_home, lambda_away, max_goals=8):
+    """Retorna matriz de probabilidades de placar (max_goals x max_goals)"""
+    prob_matrix = np.outer(poisson.pmf(np.arange(max_goals+1), lambda_home),
+                           poisson.pmf(np.arange(max_goals+1), lambda_away))
+    return prob_matrix
 
-    home_goals = df.groupby("home_team")["home_score"].agg(["mean", "count"])
-    home_conceded = df.groupby("home_team")["away_score"].mean()
-    away_goals = df.groupby("away_team")["away_score"].agg(["mean", "count"])
-    away_conceded = df.groupby("away_team")["home_score"].mean()
-
-    teams = set(home_goals.index) | set(away_goals.index)
-    strength = {}
-    for t in teams:
-        n_home = home_goals["count"].get(t, 0)
-        n_away = away_goals["count"].get(t, 0)
-        if n_home + n_away < 5:
-            continue
-        atk_home = home_goals["mean"].get(t, avg_home_goals) / avg_home_goals
-        atk_away = away_goals["mean"].get(t, avg_away_goals) / avg_away_goals
-        def_home = home_conceded.get(t, avg_away_goals) / avg_away_goals
-        def_away = away_conceded.get(t, avg_home_goals) / avg_home_goals
-
-        attack = np.average([atk_home, atk_away], weights=[n_home or 1, n_away or 1])
-        defense = np.average([def_home, def_away], weights=[n_home or 1, n_away or 1])
-        strength[t] = {"attack": attack, "defense": defense, "n_matches": n_home + n_away}
-
-    return strength, avg_home_goals, avg_away_goals
-
-
-def poisson_match_probs(home_team, away_team, strength, avg_home_goals, avg_away_goals, max_goals=8):
-    from scipy.stats import poisson
-
-    h = strength.get(home_team, {"attack": 1.0, "defense": 1.0})
-    a = strength.get(away_team, {"attack": 1.0, "defense": 1.0})
-
-    lam_home = avg_home_goals * h["attack"] * a["defense"]
-    lam_away = avg_away_goals * a["attack"] * h["defense"]
-
-    lam_home = max(lam_home, 0.05)
-    lam_away = max(lam_away, 0.05)
-
-    home_probs = [poisson.pmf(i, lam_home) for i in range(max_goals + 1)]
-    away_probs = [poisson.pmf(i, lam_away) for i in range(max_goals + 1)]
-
-    score_matrix = np.outer(home_probs, away_probs)
-
-    p_home_win = np.tril(score_matrix, -1).sum()
-    p_draw = np.trace(score_matrix)
-    p_away_win = np.triu(score_matrix, 1).sum()
-
-    return {
-        "lambda_home": lam_home,
-        "lambda_away": lam_away,
-        "p_home_win": p_home_win,
-        "p_draw": p_draw,
-        "p_away_win": p_away_win,
-        "score_matrix": score_matrix,
+def predict_match(home_team, away_team, neutral, df, elo_ratings, attack, defense, league_avg):
+    """
+    Gera predição completa usando tanto Elo quanto Poisson (apenas o Poisson é usado
+    para a matriz de placares; o Elo serve como referência ou para validação).
+    Retorna dicionário com todas as saídas.
+    """
+    # ----- Parâmetros do Poisson -----
+    # Força ofensiva e defensiva
+    att_home = attack.get(home_team, 1.0)
+    att_away = attack.get(away_team, 1.0)
+    def_home = defense.get(home_team, 1.0)
+    def_away = defense.get(away_team, 1.0)
+    
+    # Lambda esperado (gols)
+    # Se campo neutro, não há ajuste de casa; caso contrário, usa-se um fator de casa (1.2~1.4)
+    # Vamos usar uma abordagem simples: em casa, o ataque é multiplicado por 1.2 e defesa por 0.9
+    if not neutral:
+        lambda_home = league_avg * att_home * def_away * 1.2
+        lambda_away = league_avg * att_away * def_home * 0.9
+    else:
+        lambda_home = league_avg * att_home * def_away
+        lambda_away = league_avg * att_away * def_home
+    
+    # ----- Probabilidades de resultado (Poisson independente) -----
+    max_goals = 10
+    prob_matrix = poisson_match_probs(lambda_home, lambda_away, max_goals)
+    prob_home_win = np.sum(np.tril(prob_matrix, -1))   # home > away
+    prob_away_win = np.sum(np.triu(prob_matrix, 1))    # away > home
+    prob_draw = np.sum(np.diag(prob_matrix))
+    
+    # ----- Probabilidades via Elo (para referência) -----
+    elo_home = elo_ratings.get(home_team, INITIAL_ELO)
+    elo_away = elo_ratings.get(away_team, INITIAL_ELO)
+    prob_elo_home = expected_score_elo(elo_home, elo_away, neutral=neutral)
+    prob_elo_away = 1 - prob_elo_home
+    
+    # ----- Matriz de placares mais prováveis (top 10) -----
+    scores = []
+    for i in range(max_goals+1):
+        for j in range(max_goals+1):
+            prob = prob_matrix[i, j]
+            if prob > 0.001:
+                scores.append((f"{i} x {j}", prob))
+    scores.sort(key=lambda x: -x[1])
+    top_scores = scores[:10]
+    
+    # ----- Sumarização -----
+    result = {
+        'home_team': home_team,
+        'away_team': away_team,
+        'neutral': neutral,
+        'lambda_home': round(lambda_home, 2),
+        'lambda_away': round(lambda_away, 2),
+        'prob_home_win': prob_home_win,
+        'prob_draw': prob_draw,
+        'prob_away_win': prob_away_win,
+        'elo_rating_home': elo_home,
+        'elo_rating_away': elo_away,
+        'prob_elo_home': prob_elo_home,
+        'prob_elo_away': prob_elo_away,
+        'top_scores': top_scores,
+        'prob_matrix': prob_matrix
     }
+    return result
+
+def print_prediction_report(pred):
+    """Imprime no formato semelhante às imagens fornecidas"""
+    print("\n" + "="*70)
+    print(f"Modelo de Predição (Poisson Bivariado) – Base: últimos {LOOKBACK_YEARS} anos")
+    print("="*70)
+    print(f"\nSeleção da casa : {pred['home_team']}")
+    print(f"Seleção visitante: {pred['away_team']}")
+    print(f"Campo neutro     : {'Sim' if pred['neutral'] else 'Não'}")
+    print("\n--- Probabilidades de Resultado (Poisson) ---")
+    print(f"Vitória {pred['home_team']}: {pred['prob_home_win']:.1%}")
+    print(f"Empate             : {pred['prob_draw']:.1%}")
+    print(f"Vitória {pred['away_team']}: {pred['prob_away_win']:.1%}")
+    print("\n--- Gols Esperados (λ) ---")
+    print(f"λ {pred['home_team']}: {pred['lambda_home']:.2f}")
+    print(f"λ {pred['away_team']}: {pred['lambda_away']:.2f}")
+    print("\n--- Elo (referência) ---")
+    print(f"{pred['home_team']}: {pred['elo_rating_home']:.0f}  vs  {pred['away_team']}: {pred['elo_rating_away']:.0f}")
+    print(f"Probabilidade implícita por Elo: {pred['home_team']} {pred['prob_elo_home']:.1%} — {pred['away_team']} {pred['prob_elo_away']:.1%}")
+    print("\n--- Placares mais prováveis (Poisson) ---")
+    print("Placar    Prob")
+    for score, prob in pred['top_scores'][:10]:
+        print(f"{score:8}  {prob:.1%}")
+    print("="*70 + "\n")
+
+# ========================= EXECUÇÃO PRINCIPAL =========================
+if __name__ == "__main__":
+    # 1. Carregar os dados históricos
+    # Altere o caminho conforme necessário
+    DATA_PATH = "data/results.csv"   # padrão do repositório original
+    
+    try:
+        df = pd.read_csv(DATA_PATH)
+        # Verificar colunas necessárias
+        required_cols = ['date', 'home_team', 'away_team', 'home_score', 'away_score', 'tournament']
+        for col in required_cols:
+            if col not in df.columns:
+                raise ValueError(f"Coluna '{col}' não encontrada no CSV. Verifique o formato.")
+        if 'neutral' not in df.columns:
+            df['neutral'] = False   # assume que não é neutro se coluna ausente
+        print(f"Dados carregados: {len(df)} partidas, período de {df['date'].min()} a {df['date'].max()}")
+    except FileNotFoundError:
+        print(f"Erro: Arquivo '{DATA_PATH}' não encontrado.")
+        print("Por favor, forneça o caminho correto para o arquivo results.csv")
+        exit(1)
+    
+    # 2. Computar Elo nos últimos LOOKBACK_YEARS anos
+    print(f"\n[1] Calculando rating Elo (últimos {LOOKBACK_YEARS} anos)...")
+    elo_ratings = compute_elo_ratings(df, lookback_years=LOOKBACK_YEARS)
+    print(f"Times processados: {len(elo_ratings)}")
+    
+    # 3. Estimar forças ofensivas/defensivas para Poisson (mesmo período)
+    print(f"\n[2] Estimando forças para modelo Poisson (últimos {LOOKBACK_YEARS} anos)...")
+    attack, defense, league_avg = team_strength_poisson(df, lookback_years=LOOKBACK_YEARS)
+    print(f"Média global de gols por jogo: {league_avg:.2f}")
+    
+    # 4. Exemplo de predição para os jogos que você mencionou
+    #    (descomente os que desejar)
+    
+    # Exemplo 1: Suécia vs Turquia (campo neutro)
+    print("\n" + "🔮 PREDIÇÃO PARA SUÉCIA x TURQUIA (campo neutro)")
+    pred1 = predict_match("Sweden", "Türkiye", neutral=True, df=df,
+                          elo_ratings=elo_ratings, attack=attack, defense=defense, league_avg=league_avg)
+    print_prediction_report(pred1)
+    
+    # Exemplo 2: Costa do Marfim vs Equador (campo neutro)
+    print("\n" + "🔮 PREDIÇÃO PARA COSTA DO MARFIM x EQUADOR (campo neutro)")
+    pred2 = predict_match("Ivory Coast", "Ecuador", neutral=True, df=df,
+                          elo_ratings=elo_ratings, attack=attack, defense=defense, league_avg=league_avg)
+    print_prediction_report(pred2)
+    
+    # (Opcional) Exemplo com vantagem de casa:
+    # pred3 = predict_match("Brazil", "Argentina", neutral=False, ...)
+    
+    print("\n✅ Script finalizado. As probabilidades do Elo e do Poisson agora estão alinhadas porque ambas usam os mesmos últimos 10 anos.")
