@@ -52,13 +52,15 @@ with tab1:
         mc_h, mc_d, mc_a = monte_carlo(res['l_home'], res['l_away'])
         
         # Metrics
+        st.markdown("### 📊 Indicadores Chave")
         m1, m2, m3, m4 = st.columns(4)
-        m1.metric(f"Elo {home_team}", f"{res['elo_home']:.0f}")
-        m2.metric(f"Elo {away_team}", f"{res['elo_away']:.0f}")
-        m3.metric(f"xG {home_team}", f"{res['l_home']:.2f}")
-        m4.metric(f"xG {away_team}", f"{res['l_away']:.2f}")
-        style_metric_cards()
+        m1.metric("Rating Elo", f"{res['elo_home']:.0f}", help=f"Força atual de {home_team}")
+        m2.metric("Rating Elo", f"{res['elo_away']:.0f}", help=f"Força atual de {away_team}")
+        m3.metric("Gols Esperados (xG)", f"{res['l_home']:.2f}")
+        m4.metric("Gols Esperados (xG)", f"{res['l_away']:.2f}")
+        style_metric_cards(background_color="#FFFFFF", border_left_color=WC_COLORS['gold'])
 
+        st.markdown("---")
         c1, c2 = st.columns(2)
         with c1:
             st.markdown("### 🎲 Probabilidades (Monte Carlo)")
@@ -121,4 +123,3 @@ with tab3:
 
 st.markdown("---")
 st.caption("© 2026 World Cup Quant Intelligence | Elo & Poisson Models")
- 
