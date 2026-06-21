@@ -14,22 +14,34 @@ def apply_custom_styles():
     st.markdown(f"""
         <style>
         .stApp {{
-            background-color: {WC_COLORS['bg']};
+            background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+        }}
+        [data-testid="stSidebar"] {{
+            background-color: {WC_COLORS['navy']} !important;
+        }}
+        [data-testid="stSidebar"] * {{
+            color: white !important;
         }}
         .main-header {{
-            color: {WC_COLORS['maroon']};
+            background-color: {WC_COLORS['maroon']};
+            color: white !important;
             font-family: 'Trebuchet MS', sans-serif;
             text-align: center;
-            padding: 20px;
-            border-bottom: 3px solid {WC_COLORS['gold']};
-            margin-bottom: 30px;
+            padding: 30px;
+            border-radius: 15px;
+            border-bottom: 5px solid {WC_COLORS['gold']};
+            margin-bottom: 40px;
+            box-shadow: 0 10px 20px rgba(0,0,0,0.2);
         }}
         .stMetric {{
             background-color: white !important;
-            padding: 15px !important;
-            border-radius: 10px !important;
-            box-shadow: 0 4px 6px rgba(0,0,0,0.05) !important;
-            border-left: 5px solid {WC_COLORS['gold']} !important;
+            padding: 20px !important;
+            border-radius: 15px !important;
+            box-shadow: 0 8px 16px rgba(0,0,0,0.1) !important;
+            border-top: 4px solid {WC_COLORS['gold']} !important;
+        }}
+        .stMetric [data-testid="stMetricValue"] {{
+            color: {WC_COLORS['maroon']} !important;
         }}
         div[data-testid="stExpander"] {{
             border: 1px solid {WC_COLORS['gold']};
@@ -53,4 +65,3 @@ def apply_custom_styles():
         }}
         </style>
         """, unsafe_allow_html=True)
- 
