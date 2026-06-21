@@ -53,3 +53,4 @@ def apply_custom_styles():
         }}
         </style>
         """, unsafe_allow_html=True)
+ 
