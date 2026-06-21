@@ -89,4 +89,4 @@ def compute_elo_history(df, lookback_years=10):
             'away_rating_after': ratings[away],
         })
     
-    return ratings, pd.DataFrame(history)
+    return ratings, pd.DataFrame(history) 
