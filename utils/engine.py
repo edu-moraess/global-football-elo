@@ -122,3 +122,4 @@ def monte_carlo(l_home, l_away, iterations=10000):
     h_goals = np.random.poisson(l_home, iterations)
     a_goals = np.random.poisson(l_away, iterations)
     return np.sum(h_goals > a_goals)/iterations, np.sum(h_goals == a_goals)/iterations, np.sum(h_goals < a_goals)/iterations
+ 
