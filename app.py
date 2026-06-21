@@ -121,3 +121,4 @@ with tab3:
 
 st.markdown("---")
 st.caption("© 2026 World Cup Quant Intelligence | Elo & Poisson Models")
+ 
