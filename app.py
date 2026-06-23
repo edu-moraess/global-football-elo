@@ -382,7 +382,7 @@ elif page == "📊 Métricas Avançadas":
         consist = team_consistency(elo_history, team, n_last=20)
         gw_start, gw_end = golden_window(elo_history, team, min_window=8, threshold_pct=0.95)
         reg_speed = regression_speed(elo_history, team)
-        xg_eff, avg_g = xg_efficiency(df, team, lookback_years=5)
+        xg_eff, avg_g = xg_efficiency(elo_history, team, lookback_years=5)
 
         cols = st.columns(4)
         cols[0].metric("Volatilidade Elo", f"{vol:.1f}" if vol is not np.nan else "N/A",
