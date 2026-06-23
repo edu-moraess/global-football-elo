@@ -1,0 +1,185 @@
+"""
+Gráficos Plotly reutilizáveis.
+"""
+import streamlit as st
+import plotly.graph_objects as go
+import plotly.express as px
+import numpy as np
+
+
+def plot_radar(categories, stats_h, stats_a, name_h, name_a, color_h='#e94560', color_a='#0f3460'):
+    fig = go.Figure()
+    fig.add_trace(go.Scatterpolar(
+        r=stats_h + [stats_h[0]], theta=categories + [categories[0]],
+        fill='toself', name=name_h, line_color=color_h
+    ))
+    fig.add_trace(go.Scatterpolar(
+        r=stats_a + [stats_a[0]], theta=categories + [categories[0]],
+        fill='toself', name=name_a, line_color=color_a
+    ))
+    fig.update_layout(
+        polar=dict(radialaxis=dict(visible=True, range=[0, 100])),
+        showlegend=True, margin=dict(t=30, b=30, l=30, r=30),
+        paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)'
+    )
+    st.plotly_chart(fig, use_container_width=True, key="radar_chart")
+
+
+def plot_scatter_conf(conf_stats):
+    fig = px.scatter(
+        conf_stats, x='Média Elo', y='Desvio', size='Seleções', color='Confederação',
+        text='Confederação', size_max=60,
+        title="Dispersão de Força: Média vs. Desigualdade Interna",
+        labels={'Desvio': 'Desigualdade Interna (σ Elo)', 'Média Elo': 'Força Média'}
+    )
+    fig.update_traces(textposition='top center')
+    fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
+    st.plotly_chart(fig, use_container_width=True, key="scatter_conf")
+
+
+def plot_bar_momentum(top_mom):
+    fig = px.bar(
+        top_mom, x='Momentum', y='Seleção', orientation='h', color='Momentum',
+        color_continuous_scale='RdYlGn', title="Times em Ascensão Imediata"
+    )
+    fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
+    st.plotly_chart(fig, use_container_width=True, key="bar_momentum")
+
+
+def plot_pie_probs(probs, labels, colors):
+    fig = go.Figure(data=[go.Pie(
+        labels=labels, values=probs, hole=0.5,
+        marker_colors=colors, textinfo='label+percent',
+        insidetextorientation='radial'
+    )])
+    fig.update_layout(showlegend=False, margin=dict(t=0, b=0, l=0, r=0),
+                      paper_bgcolor='rgba(0,0,0,0)')
+    st.plotly_chart(fig, use_container_width=True, key="pie_probs")
+
+
+def plot_heatmap_matrix(matrix, name_h, name_a):
+    fig = px.imshow(
+        matrix[:7, :7],
+        labels=dict(x=f"Gols {name_a}", y=f"Gols {name_h}", color="Prob"),
+        x=[str(i) for i in range(7)], y=[str(i) for i in range(7)],
+        color_continuous_scale="Blues", aspect="equal"
+    )
+    fig.update_traces(text=np.round(matrix[:7, :7], 3),
+                      texttemplate="%{text:.1%}", textfont={"size": 10})
+    fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
+    st.plotly_chart(fig, use_container_width=True, key="heatmap_matrix")
+
+
+def plot_waterfall(x, y, title="Impacto"):
+    fig = go.Figure(go.Waterfall(
+        name="Impacto", orientation="v",
+        measure=["relative"] * len(x), x=x, y=y,
+        connector={"line": {"color": "rgb(63, 63, 63)"}},
+        decreasing={"marker": {"color": "#0f3460"}},
+        increasing={"marker": {"color": "#e94560"}}
+    ))
+    fig.update_layout(title=title, yaxis_title="Δ Probabilidade (%)",
+                      paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
+    st.plotly_chart(fig, use_container_width=True, key="waterfall")
+
+
+def plot_evolution(s, team, color='#e94560'):
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=s['date'], y=s['rating'], mode='lines',
+        name='Elo', line=dict(color=color, width=2)
+    ))
+    s = s.copy()
+    s['ma_10'] = s['rating'].rolling(window=10, min_periods=1, center=True).mean()
+    fig.add_trace(go.Scatter(
+        x=s['date'], y=s['ma_10'], mode='lines',
+        name='MA-10', line=dict(color='#0f3460', width=2, dash='dash')
+    ))
+    s['std_10'] = s['rating'].rolling(window=10, min_periods=1, center=True).std()
+    fig.add_trace(go.Scatter(
+        x=s['date'], y=s['ma_10'] + s['std_10'],
+        fill=None, mode='lines', line_color='rgba(0,0,0,0)',
+        showlegend=False, hoverinfo='skip'
+    ))
+    fig.add_trace(go.Scatter(
+        x=s['date'], y=s['ma_10'] - s['std_10'],
+        fill='tonexty', fillcolor='rgba(15,52,96,0.2)',
+        mode='lines', line_color='rgba(0,0,0,0)',
+        showlegend=False, hoverinfo='skip'
+    ))
+    fig.update_layout(
+        title=f"Evolução de Elo — {team}", xaxis_title="Data", yaxis_title="Rating",
+        hovermode="x unified", paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)'
+    )
+    st.plotly_chart(fig, use_container_width=True, key=f"evol_{team}")
+
+
+def plot_timeline(h2h_df, home_team, away_team):
+    fig = go.Figure()
+    for _, row in h2h_df.iterrows():
+        if row['home_team'] == home_team:
+            gd = row['home_score'] - row['away_score']
+            color = '#e94560' if gd > 0 else '#0f3460' if gd < 0 else '#888888'
+        else:
+            gd = row['away_score'] - row['home_score']
+            color = '#e94560' if gd > 0 else '#0f3460' if gd < 0 else '#888888'
+        fig.add_trace(go.Scatter(
+            x=[row['date']], y=[gd],
+            mode='markers', marker=dict(size=12, color=color),
+            showlegend=False,
+            hovertext=f"{row['home_team']} {row['home_score']} x {row['away_score']} {row['away_team']}<br>"
+                      f"{row.get('tournament', 'N/A')}<br>{row['date'].strftime('%Y-%m-%d')}"
+        ))
+    fig.update_layout(
+        title="Timeline de Confrontos (Diferença de Gols)",
+        yaxis_title=f"GD favorável a {home_team}", xaxis_title="Ano",
+        hovermode="closest", paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)'
+    )
+    st.plotly_chart(fig, use_container_width=True, key="timeline_h2h")
+
+
+def plot_sensitivity(df):
+    """Gráfico de análise de sensibilidade Elo."""
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=df['Elo Shift'], y=df['Prob Casa'], mode='lines+markers',
+                               name='Prob Casa', line=dict(color='#e94560')))
+    fig.add_trace(go.Scatter(x=df['Elo Shift'], y=df['Prob Empate'], mode='lines+markers',
+                               name='Prob Empate', line=dict(color='#f0f0f0')))
+    fig.add_trace(go.Scatter(x=df['Elo Shift'], y=df['Prob Fora'], mode='lines+markers',
+                               name='Prob Fora', line=dict(color='#0f3460')))
+    fig.add_vline(x=0, line_dash="dash", line_color="gray")
+    fig.update_layout(
+        title="Sensibilidade à Variação de Elo",
+        xaxis_title="Δ Elo (Casa)", yaxis_title="Probabilidade",
+        paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)'
+    )
+    st.plotly_chart(fig, use_container_width=True, key="sensitivity_chart")
+
+
+def plot_tournament_probs(df):
+    """Gráfico de probabilidades de torneio."""
+    fig = px.bar(
+        df.head(16), x='Seleção', y=['title', 'final', 'semi', 'quarter'],
+        title="Probabilidades de Avanço no Torneio (Top 16)",
+        labels={'value': 'Probabilidade', 'variable': 'Fase'},
+        color_discrete_map={'title': '#e94560', 'final': '#f0a500', 'semi': '#0f3460', 'quarter': '#2a2a4a'}
+    )
+    fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', barmode='group')
+    st.plotly_chart(fig, use_container_width=True, key="tournament_probs")
+
+
+def plot_scenario_radar(scenarios_df, home_team, away_team):
+    """Radar comparativo de cenários."""
+    fig = go.Figure()
+    for _, row in scenarios_df.iterrows():
+        vals = [row['Prob Casa'], row['Prob Empate'], row['Prob Fora']]
+        fig.add_trace(go.Scatterpolar(
+            r=vals + [vals[0]], theta=['Casa', 'Empate', 'Fora', 'Casa'],
+            fill='toself', name=row['Cenário']
+        ))
+    fig.update_layout(
+        polar=dict(radialaxis=dict(visible=True, range=[0, 1])),
+        showlegend=True, margin=dict(t=30, b=30, l=30, r=30),
+        paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)'
+    )
+    st.plotly_chart(fig, use_container_width=True, key="scenario_radar")
