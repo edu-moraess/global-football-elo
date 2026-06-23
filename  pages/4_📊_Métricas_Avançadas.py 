@@ -1,0 +1,95 @@
+import streamlit as st
+import numpy as np
+import plotly.express as px
+
+from core.data_loader import load_data, get_processed_data, get_global_metrics, LOOKBACK_YEARS
+from core.metrics_engine import (
+    elo_volatility, elo_momentum, elo_efficiency, schedule_strength,
+    team_consistency, golden_window, regression_speed, xg_efficiency,
+    clutch_performance, generation_cycles, form_index, tactical_profile
+)
+from components.sidebar import render_sidebar
+from components.cards import metric_cards, info_box, narrative_card
+
+st.set_page_config(page_title="Métricas Avançadas", layout="wide")
+
+df = load_data()
+elo_ratings, elo_history, attack, defense, league_avg = get_processed_data(df, LOOKBACK_YEARS)
+teams = sorted(list(elo_ratings.keys()))
+
+state = render_sidebar(teams)
+lookback = state['lookback']
+if lookback != LOOKBACK_YEARS:
+    elo_ratings, elo_history, attack, defense, league_avg = get_processed_data(df, lookback)
+
+st.markdown("<h2>📊 Métricas Avançadas</h2>", unsafe_allow_html=True)
+st.markdown("""
+<p style='color:#888; line-height:1.6;'>
+<b>Forma é fumaça, estrutura é fogo.</b> Aqui vamos além do Elo: analisamos consistência, 
+resiliência contra adversários superiores, performance em jogos decisivos (clutch) e os ciclos de geração 
+que definem eras inteiras de uma seleção. Cada métrica conta uma história diferente.
+</p>
+""", unsafe_allow_html=True)
+
+for team in [state['home_team'], state['away_team']]:
+    st.divider()
+    st.subheader(f"🔬 {team}")
+
+    vol = elo_volatility(elo_history, team, window=10)
+    mom = elo_momentum(elo_history, team)
+    eff_real, eff_edge = elo_efficiency(elo_history, team, n_last=20)
+    sched = schedule_strength(elo_history, team, n_last=10)
+    consist = team_consistency(elo_history, team, n_last=20)
+    gw_start, gw_end = golden_window(elo_history, team, min_window=8, threshold_pct=0.95)
+    reg_speed = regression_speed(elo_history, team)
+    xg_eff, avg_g = xg_efficiency(elo_history, team, lookback_years=5)
+    clutch = clutch_performance(elo_history, team, n_last=30)
+    cycles = generation_cycles(elo_history, team)
+    form = form_index(elo_history, team, n_last=5)
+    tactical = tactical_profile(elo_history, team, n_last=20)
+
+    metric_cards([
+        {'label': 'Volatilidade Elo', 'value': f"{vol:.1f}" if vol is not np.nan else "N/A", 'help': "Quanto maior, mais imprevisível"},
+        {'label': 'Momentum', 'value': f"{mom:+.1f}" if mom is not np.nan else "N/A", 'help': "Diferença média curta vs. longa prazo"},
+        {'label': 'Eficiência', 'value': f"{eff_real:.2f} pts/j" if eff_real is not np.nan else "N/A", 'help': "Pontos reais por jogo"},
+        {'label': 'Consistência (CV)', 'value': f"{consist:.4f}" if consist is not np.nan else "N/A", 'help': "Coef. de variação. Menor = mais consistente"},
+    ], cols=4)
+
+    metric_cards([
+        {'label': 'Força Agenda', 'value': f"{sched:.0f}" if sched is not np.nan else "N/A", 'help': "Elo médio dos adversários recentes"},
+        {'label': 'Velocidade Regressão', 'value': f"{reg_speed:.0f} jgs" if reg_speed is not np.nan else "N/A", 'help': "Jogos para regressar à média após pico"},
+        {'label': 'xG Efficiency', 'value': f"{xg_eff:.2f}" if xg_eff is not np.nan else "N/A", 'help': "Gols reais / expectativa ofensiva"},
+        {'label': 'Média Gols', 'value': f"{avg_g:.2f}" if avg_g is not np.nan else "N/A"},
+    ], cols=4)
+
+    metric_cards([
+        {'label': 'Clutch', 'value': f"{clutch:+.2f}" if clutch is not np.nan else "N/A", 'help': "Performance em oficiais vs amistosos"},
+        {'label': 'Ciclos', 'value': f"{cycles['ciclos']}", 'help': f"Duração média: {cycles['duracao_media']:.0f}j" if cycles['duracao_media'] is not np.nan else "N/A"},
+        {'label': 'Forma (5j)', 'value': f"{form:.2f}" if form is not np.nan else "N/A", 'help': "Índice ponderado dos últimos 5 jogos"},
+        {'label': 'Resiliência', 'value': f"{tactical['resiliencia']:.2f}" if tactical['resiliencia'] is not np.nan else "N/A", 'help': "Pontos vs adversários superiores"},
+    ], cols=4)
+
+    if gw_start and gw_end:
+        st.success(f"🏆 **Janela de Ouro detectada**: {gw_start.strftime('%Y-%m')} → {gw_end.strftime('%Y-%m')}")
+    else:
+        st.info("Nenhuma janela de ouro clara detectada (requer mínimo 8 jogos).")
+
+st.divider()
+st.subheader("📈 Comparativo Visual de Métricas")
+info_box("Este mapa posiciona todas as seleções em um espaço bidimensional: Elo (força) vs. Momentum (tendência). "
+         "O tamanho do ponto representa eficiência. A cor representa volatilidade. "
+         f"As linhas tracejadas destacam <b style='color:#e94560'>{state['home_team']}</b> e "
+         f"<b style='color:#0f3460'>{state['away_team']}</b>.",
+         type="info")
+metrics_df = get_global_metrics(elo_ratings, elo_history, teams).dropna()
+
+fig_scatter = px.scatter(
+    metrics_df, x='Elo', y='Momentum', size='Eficiência Real', color='Volatilidade',
+    hover_data=['Seleção', 'Consistência'],
+    title="Mapa Quant: Elo vs. Momentum (tamanho = eficiência)",
+    color_continuous_scale='YlOrRd'
+)
+fig_scatter.add_vline(x=elo_ratings[state['home_team']], line_dash="dash", line_color="#e94560", annotation_text=state['home_team'])
+fig_scatter.add_vline(x=elo_ratings[state['away_team']], line_dash="dash", line_color="#0f3460", annotation_text=state['away_team'])
+fig_scatter.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
+st.plotly_chart(fig_scatter, use_container_width=True)
