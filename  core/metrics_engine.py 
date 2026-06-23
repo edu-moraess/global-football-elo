@@ -1,0 +1,320 @@
+"""
+Métricas avançadas de análise quantitativa para futebol.
+Sem dependências de apostas — foco em performance, tática e contexto histórico.
+"""
+import numpy as np
+import pandas as pd
+from datetime import timedelta
+
+from .elo_engine import get_confederation
+
+
+def get_team_history(history_df, team, n_last=None):
+    """Filtra histórico de um time."""
+    s = history_df[history_df['team'] == team].sort_values('date')
+    if n_last:
+        s = s.tail(n_last)
+    return s.copy()
+
+
+def elo_volatility(history_df, team, window=10):
+    """Desvio padrão das mudanças de Elo na janela."""
+    s = get_team_history(history_df, team)
+    if len(s) < window + 1:
+        return np.nan
+    s = s.copy()
+    s['delta'] = s['rating'].diff()
+    return s['delta'].tail(window).std()
+
+
+def elo_momentum(history_df, team, short_window=5, long_window=15):
+    """Diferença entre média curta e longa de Elo."""
+    s = get_team_history(history_df, team)
+    if len(s) < long_window:
+        return np.nan
+    short = s['rating'].tail(short_window).mean()
+    long = s['rating'].tail(long_window).mean()
+    return short - long
+
+
+def elo_efficiency(history_df, team, n_last=20):
+    """Pontos reais vs esperados por jogo."""
+    s = get_team_history(history_df, team).tail(n_last)
+    if len(s) < 5:
+        return np.nan, np.nan
+    real = s['result'].mean() * 3
+    expected = (s['expected'] * 3).mean()
+    edge = real - expected
+    return real, edge
+
+
+def schedule_strength(history_df, team, n_last=10):
+    """Elo médio dos adversários recentes no momento do confronto."""
+    s = get_team_history(history_df, team).tail(n_last)
+    if len(s) < 3:
+        return np.nan
+    
+    opponent_elos = []
+    for _, row in s.iterrows():
+        opp = row['opponent']
+        match_date = row['date']
+        opp_history = history_df[(history_df['team'] == opp) & (history_df['date'] <= match_date)]
+        if len(opp_history) > 0:
+            opponent_elos.append(opp_history['rating'].iloc[-1])
+        else:
+            opponent_elos.append(1500)
+    
+    return np.mean(opponent_elos)
+
+
+def team_consistency(history_df, team, n_last=20):
+    """Coeficiente de variação do Elo (menor = mais consistente)."""
+    s = get_team_history(history_df, team).tail(n_last)
+    if len(s) < 5:
+        return np.nan
+    mean_elo = s['rating'].mean()
+    if mean_elo == 0:
+        return np.nan
+    return s['rating'].std() / mean_elo
+
+
+def golden_window(history_df, team, min_window=8, threshold_pct=0.95):
+    """Detecta período de pico de performance."""
+    s = get_team_history(history_df, team)
+    if len(s) < min_window:
+        return None, None
+    s = s.reset_index(drop=True)
+    max_elo = s['rating'].max()
+    threshold = max_elo * threshold_pct
+    above = s[s['rating'] >= threshold]
+    if len(above) < min_window:
+        return None, None
+    above['group'] = (above.index.to_series().diff() > 1).cumsum()
+    groups = above.groupby('group')
+    best = max(groups, key=lambda g: len(g[1]))
+    if len(best[1]) < min_window:
+        return None, None
+    return best[1]['date'].min(), best[1]['date'].max()
+
+
+def regression_speed(history_df, team):
+    """Jogos necessários para regressar à média após pico."""
+    s = get_team_history(history_df, team)
+    if len(s) < 20:
+        return np.nan
+    peak_idx = s['rating'].idxmax()
+    peak = s.loc[peak_idx, 'rating']
+    mean_elo = s['rating'].mean()
+    after = s.loc[peak_idx:]
+    if len(after) < 2:
+        return np.nan
+    crossed = after[after['rating'] <= mean_elo]
+    if crossed.empty:
+        return len(after)
+    return crossed.index[0] - peak_idx
+
+
+def h2h_psychological_edge(df, team_a, team_b, lookback_years=30):
+    """Análise de confrontos diretos."""
+    cutoff = df['date'].max() - timedelta(days=365 * lookback_years)
+    h2h = df[
+        ((df['home_team'] == team_a) & (df['away_team'] == team_b)) |
+        ((df['home_team'] == team_b) & (df['away_team'] == team_a))
+    ]
+    h2h = h2h[h2h['date'] >= cutoff]
+
+    if h2h.empty:
+        return {'total': 0, 'wins_a': 0, 'wins_b': 0, 'draws': 0,
+                'gd_sum': 0, 'streak': 0, 'edge': 'Nenhum', 'dominance': 0,
+                'first_match': None, 'last_match': None}
+
+    wins_a = wins_b = draws = gd_sum = streak = current_streak = 0
+
+    for _, row in h2h.sort_values('date').iterrows():
+        if row['home_team'] == team_a:
+            gd = row['home_score'] - row['away_score']
+        else:
+            gd = row['away_score'] - row['home_score']
+        gd_sum += gd
+        if gd > 0:
+            wins_a += 1
+            current_streak += 1
+        elif gd < 0:
+            wins_b += 1
+            current_streak = 0
+        else:
+            draws += 1
+            current_streak = 0
+        streak = max(streak, current_streak)
+
+    total = len(h2h)
+    dominance = (wins_a - wins_b) / total if total > 0 else 0
+
+    if dominance > 0.4:
+        edge = 'Forte domínio ' + team_a
+    elif dominance < -0.4:
+        edge = 'Forte domínio ' + team_b
+    elif dominance > 0.15:
+        edge = 'Leve vantagem ' + team_a
+    elif dominance < -0.15:
+        edge = 'Leve vantagem ' + team_b
+    else:
+        edge = 'Equilibrado'
+
+    return {
+        'total': total, 'wins_a': wins_a, 'wins_b': wins_b, 'draws': draws,
+        'gd_sum': gd_sum, 'streak': streak, 'edge': edge, 'dominance': dominance,
+        'first_match': h2h['date'].min(), 'last_match': h2h['date'].max()
+    }
+
+
+def home_advantage_by_confederation(df, history_df, confederations):
+    """Calcula vantagem de casa por confederação."""
+    rows = []
+    for conf, teams in confederations.items():
+        conf_games = df[
+            (df['home_team'].isin(teams)) & (df['away_team'].isin(teams))
+        ].copy()
+        if len(conf_games) < 50:
+            continue
+        home_wins = (conf_games['home_score'] > conf_games['away_score']).mean()
+        away_wins = (conf_games['home_score'] < conf_games['away_score']).mean()
+        draws = (conf_games['home_score'] == conf_games['away_score']).mean()
+        avg_gd = (conf_games['home_score'] - conf_games['away_score']).mean()
+        rows.append({
+            'Confederação': conf,
+            'Home Win %': home_wins,
+            'Away Win %': away_wins,
+            'Draw %': draws,
+            'Avg GD': avg_gd,
+            'Advantage Index': home_wins - away_wins
+        })
+    return pd.DataFrame(rows)
+
+
+def xg_efficiency(history_df, team, lookback_years=5):
+    """
+    Razão gols reais / gols esperados (proxy via Elo expected).
+    Nota: expected no histórico é a probabilidade Elo pré-jogo, não xG real.
+    Usamos como proxy de expectativa ofensiva.
+    """
+    if 'date' not in history_df.columns or history_df.empty:
+        return np.nan, np.nan
+    cutoff = history_df['date'].max() - timedelta(days=365 * lookback_years)
+    s = history_df[(history_df['team'] == team) & (history_df['date'] >= cutoff)]
+    if len(s) < 5:
+        return np.nan, np.nan
+    real_goals = s['goals_for'].mean()
+    xg_proxy = s['expected'].mean() * 2.5
+    if xg_proxy == 0:
+        return np.nan, np.nan
+    return real_goals / xg_proxy, real_goals
+
+
+# ========== NOVAS MÉTRICAS (NÃO RELACIONADAS A APOSTAS) ==========
+
+def form_index(history_df, team, n_last=5):
+    """
+    Índice de forma recente: média ponderada dos últimos resultados.
+    Vitória = 3, Empate = 1, Derrota = 0. Ponderação exponencial.
+    """
+    s = get_team_history(history_df, team).tail(n_last)
+    if len(s) < 3:
+        return np.nan
+    weights = np.exp(np.linspace(0, 1, len(s)))
+    weights /= weights.sum()
+    points = s['result'].values * 3
+    return np.dot(points, weights)
+
+
+def tactical_profile(history_df, team, n_last=20):
+    """
+    Perfil tático: xG proxy, xGA proxy, pressão ofensiva, resiliência.
+    
+    Pressão Ofensiva: média de gols marcados quando o adversário tem Elo superior
+    (jogos onde o time é zebra — mede capacidade de surpreender).
+    
+    Resiliência: taxa de pontos conquistados quando o adversário tem Elo superior.
+    """
+    s = get_team_history(history_df, team).tail(n_last)
+    if len(s) < 5:
+        return {'xG': np.nan, 'xGA': np.nan, 'pressao': np.nan, 'resiliencia': np.nan}
+
+    xg = s['expected'].mean() * 2.5
+    xga = (1 - s['expected']).mean() * 2.5
+
+    underdog_games = []
+    for _, row in s.iterrows():
+        opp = row['opponent']
+        match_date = row['date']
+        opp_elo = history_df[(history_df['team'] == opp) & (history_df['date'] <= match_date)]
+        if len(opp_elo) > 0:
+            opp_rating = opp_elo['rating'].iloc[-1]
+            if opp_rating > row['rating']:
+                underdog_games.append(row)
+
+    if len(underdog_games) >= 3:
+        ud_df = pd.DataFrame(underdog_games)
+        pressao = ud_df['goals_for'].mean()
+        resiliencia = ud_df['result'].mean()
+    else:
+        pressao = np.nan
+        resiliencia = np.nan
+
+    return {'xG': xg, 'xGA': xga, 'pressao': pressao, 'resiliencia': resiliencia}
+
+
+def clutch_performance(history_df, team, n_last=30):
+    """
+    Performance em jogos decisivos: torneios oficiais vs amistosos.
+    Mede se o time eleva o nível em competições.
+    Retorna diferença de pontos por jogo (oficiais - amistosos).
+    """
+    s = get_team_history(history_df, team).tail(n_last)
+    if len(s) < 10:
+        return np.nan
+
+    official = s[~s['tournament'].str.contains('Friendly', na=False)]
+    friendly = s[s['tournament'].str.contains('Friendly', na=False)]
+
+    if len(official) < 3 or len(friendly) < 3:
+        return np.nan
+
+    official_perf = official['result'].mean() * 3
+    friendly_perf = friendly['result'].mean() * 3
+
+    return official_perf - friendly_perf
+
+
+def generation_cycles(history_df, team, prominence=15):
+    """
+    Detecta ciclos de geração (picos e vales) no histórico Elo.
+    Retorna dict com número de ciclos, duração média, amplitude.
+    """
+    from scipy.signal import find_peaks
+    s = get_team_history(history_df, team)
+    if len(s) < 20:
+        return {'ciclos': 0, 'duracao_media': np.nan, 'amplitude': np.nan}
+
+    ratings = s['rating'].values
+    peaks, _ = find_peaks(ratings, distance=10, prominence=prominence)
+    valleys, _ = find_peaks(-ratings, distance=10, prominence=prominence)
+
+    n_ciclos = min(len(peaks), len(valleys))
+    if n_ciclos == 0:
+        return {'ciclos': 0, 'duracao_media': np.nan, 'amplitude': np.nan}
+
+    if len(peaks) >= 2:
+        duracao = np.mean(np.diff(peaks))
+    else:
+        duracao = np.nan
+
+    amplitudes = []
+    for p in peaks:
+        v_before = [v for v in valleys if v < p]
+        if v_before:
+            amplitudes.append(ratings[p] - ratings[max(v_before)])
+
+    amplitude = np.mean(amplitudes) if amplitudes else np.nan
+
+    return {'ciclos': len(peaks), 'duracao_media': duracao, 'amplitude': amplitude}
