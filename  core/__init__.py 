@@ -1,0 +1,24 @@
+# Core engine package
+from .data_loader import load_data, get_processed_data, get_global_metrics, LOOKBACK_YEARS
+from .elo_engine import compute_elo_history, INITIAL_ELO, get_confederation, CONFEDERATIONS
+from .poisson_engine import get_poisson_strengths, predict_match, monte_carlo
+from .metrics_engine import (
+    get_team_history, elo_volatility, elo_momentum, elo_efficiency,
+    schedule_strength, golden_window, regression_speed, h2h_psychological_edge,
+    home_advantage_by_confederation, team_consistency, xg_efficiency,
+    clutch_performance, generation_cycles, form_index, tactical_profile
+)
+from .tournament_engine import simulate_group_stage, simulate_knockout, simulate_full_tournament
+from .scenario_engine import sensitivity_analysis, scenario_matrix, what_if_elo_shift
+
+__all__ = [
+    'load_data', 'get_processed_data', 'get_global_metrics', 'LOOKBACK_YEARS',
+    'compute_elo_history', 'INITIAL_ELO', 'get_confederation', 'CONFEDERATIONS',
+    'get_poisson_strengths', 'predict_match', 'monte_carlo',
+    'get_team_history', 'elo_volatility', 'elo_momentum', 'elo_efficiency',
+    'schedule_strength', 'golden_window', 'regression_speed', 'h2h_psychological_edge',
+    'home_advantage_by_confederation', 'team_consistency', 'xg_efficiency',
+    'clutch_performance', 'generation_cycles', 'form_index', 'tactical_profile',
+    'simulate_group_stage', 'simulate_knockout', 'simulate_full_tournament',
+    'sensitivity_analysis', 'scenario_matrix', 'what_if_elo_shift'
+]
