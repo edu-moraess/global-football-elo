@@ -1,0 +1,90 @@
+import streamlit as st
+import pandas as pd
+import numpy as np
+
+from core.data_loader import load_data, get_processed_data, get_global_metrics, LOOKBACK_YEARS
+from core.metrics_engine import get_confederation, elo_volatility, elo_momentum, elo_efficiency, schedule_strength, team_consistency
+from components.sidebar import render_sidebar
+from components.tables import ranking_table
+from components.charts import plot_scatter_conf, plot_bar_momentum
+from components.cards import narrative_card, info_box
+
+st.set_page_config(page_title="Inteligência Elo", layout="wide")
+
+df = load_data()
+elo_ratings, elo_history, attack, defense, league_avg = get_processed_data(df, LOOKBACK_YEARS)
+teams = sorted(list(elo_ratings.keys()))
+
+state = render_sidebar(teams)
+lookback = state['lookback']
+if lookback != LOOKBACK_YEARS:
+    elo_ratings, elo_history, attack, defense, league_avg = get_processed_data(df, lookback)
+
+metrics_df = get_global_metrics(elo_ratings, elo_history, teams)
+rank_df = metrics_df.sort_values('Elo', ascending=False).reset_index(drop=True)
+rank_df.index += 1
+
+st.markdown("<h2>🧠 Inteligência Elo Global</h2>", unsafe_allow_html=True)
+st.markdown("""
+<p style='color:#888; line-height:1.6;'>
+O ranking Elo não é uma opinião. É uma memória. Cada jogo deixa uma marca, cada vitória contra um gigante 
+eleva o rating mais do que uma goleada contra um adversário fraco. Aqui, o passado pesa — mas o presente pesa mais.
+</p>
+""", unsafe_allow_html=True)
+
+col1, col2 = st.columns([3, 1])
+
+with col1:
+    st.subheader("🏆 Ranking Quant Completo")
+    info_box("<b>Como ler:</b> Elo é a força bruta. Momentum indica tendência de curto prazo. "
+             "Volatilidade mede imprevisibilidade. Edge de eficiência mostra se o time supera ou subperforma sua expectativa.",
+             type="info")
+    display_df = rank_df[['Seleção', 'Elo', 'Confederação', 'Momentum', 'Volatilidade', 'Edge Eficiência', 'Forma (5j)']].head(50)
+    ranking_table(display_df)
+
+with col2:
+    st.subheader("📜 Narrativa Tática")
+    for t in [state['home_team'], state['away_team']]:
+        vol = elo_volatility(elo_history, t, window=10)
+        mom = elo_momentum(elo_history, t)
+        eff_real, eff_edge = elo_efficiency(elo_history, t, n_last=20)
+        sched = schedule_strength(elo_history, t, n_last=10)
+        consist = team_consistency(elo_history, t, n_last=20)
+        conf = get_confederation(t)
+        rank_pos = rank_df[rank_df['Seleção']==t].index[0] if t in rank_df['Seleção'].values else '?'
+
+        if mom is not np.nan and mom > 15:
+            status, status_color = "ascensão", "#4ade80"
+            status_txt = f"O time vive um momento de <b style='color:{status_color}'>ascensão</b> com momentum de +{mom:.1f} pts."
+        elif mom is not np.nan and mom < -15:
+            status, status_color = "declínio", "#f87171"
+            status_txt = f"O time está em <b style='color:{status_color}'>declínio</b> com momentum de {mom:.1f} pts."
+        else:
+            status, status_color = "estabilidade", "#fbbf24"
+            status_txt = f"O time está em <b style='color:{status_color}'>estabilidade</b> de curto prazo."
+
+        vol_txt = f"Volatilidade: {vol:.1f} — {'imprevisível' if vol and vol > 25 else 'previsível' if vol else 'N/A'}" if vol else ""
+        eff_txt = f"Eficiência: {eff_real:.2f} pts/jogo" if eff_real else ""
+
+        narrative_card(
+            f"{t} — #{rank_pos} Mundial",
+            f"{status_txt}<br>{vol_txt}<br>{eff_txt}",
+            f"Elo: {elo_ratings[t]:.0f} | Confederação: {conf} | Agenda: {sched:.0f if sched is not np.nan else 'N/A'} | Consistência: {consist:.3f if consist is not np.nan else 'N/A'}"
+        )
+        st.divider()
+
+st.subheader("🌍 Distribuição de Força por Confederação")
+info_box("A UEFA domina em volume de seleções, mas a CONMEBOL tem a maior <b>densidade de elite</b> — "
+         "menos times, mas com Elo médio mais concentrado no topo. A CAF mostra a maior desigualdade interna, "
+         "refletindo o gap entre potências como Senegal/Marrocos e seleções em desenvolvimento.",
+         type="info")
+conf_stats = rank_df.groupby('Confederação').agg({'Elo': ['mean', 'std', 'max', 'count']}).reset_index()
+conf_stats.columns = ['Confederação', 'Média Elo', 'Desvio', 'Máximo', 'Seleções']
+plot_scatter_conf(conf_stats)
+
+st.subheader("🚀 Top 10 Momentum — Quem está em ascensão?")
+info_box("Momentum captura a diferença entre a média de Elo dos últimos 5 jogos vs. 15 jogos. "
+         "Um valor positivo indica que o time está subindo de patamar. Valores negativos sinalizam alerta.",
+         type="info")
+top_mom = rank_df.dropna(subset=['Momentum']).sort_values('Momentum', ascending=False).head(10)
+plot_bar_momentum(top_mom)
