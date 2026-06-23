@@ -1,5 +1,4 @@
 import streamlit as st
-
 from core.data_loader import load_data, get_processed_data, LOOKBACK_YEARS
 from core.metrics_engine import get_confederation, home_advantage_by_confederation
 from core.poisson_engine import predict_match
@@ -12,79 +11,46 @@ st.set_page_config(page_title="Contexto de Campo", layout="wide")
 df = load_data()
 elo_ratings, elo_history, attack, defense, league_avg = get_processed_data(df, LOOKBACK_YEARS)
 teams = sorted(list(elo_ratings.keys()))
-
 state = render_sidebar(teams)
 home, away, neutral = state['home_team'], state['away_team'], state['neutral']
 
-st.markdown("<h2>🏟️ Contexto de Campo</h2>", unsafe_allow_html=True)
-st.markdown("""
-<p style='color:#888; line-height:1.6;'>
-A altitude de La Paz. O calor de Manaus. O gelo de Reykjavík. O futebol não é jogado no vácuo — 
-é jogado em lugares reais, com atmosferas reais, contra torcidas que transformam estádios em fortalezas. 
-Aqui quantificamos o que os olhos veem: a vantagem de casa não é mitologia. É geografia, fisiologia e psicologia.
-</p>
-""", unsafe_allow_html=True)
+st.title("🏟️ Contexto de Campo")
+st.markdown("A altitude de La Paz. O calor de Manaus. O gelo de Reykjavík. A vantagem de casa é geografia, fisiologia e psicologia.")
 
 from core.elo_engine import CONFEDERATIONS
 ha_df = home_advantage_by_confederation(df, elo_history, CONFEDERATIONS)
 if not ha_df.empty:
-    st.subheader("🌍 Home Advantage Real por Confederação")
-    info_box("O índice de vantagem mede a diferença entre taxa de vitórias em casa e fora, dentro de cada confederação. "
-             "Valores próximos de zero indicam equilíbrio geográfico e infraestrutural. Valores altos sugerem "
-             "barreiras naturais (altitude, clima, distância) ou atmosferas hostis.",
-             type="info")
+    st.subheader("🌍 Home Advantage por Confederação")
     import plotly.express as px
     fig_ha = px.bar(ha_df.sort_values('Advantage Index', ascending=True),
                     x='Advantage Index', y='Confederação', orientation='h',
                     color='Advantage Index', color_continuous_scale='RdYlGn',
                     text='Advantage Index',
-                    labels={'Advantage Index': 'Índice de Vantagem (0 = neutro)'})
+                    labels={'Advantage Index': 'Índice de Vantagem'})
     fig_ha.update_traces(texttemplate='%{text:.2%}', textposition='outside')
     fig_ha.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
     st.plotly_chart(fig_ha, use_container_width=True)
 
-    st.markdown("""
-    <div style="background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%); padding: 18px; border-radius: 10px; margin: 16px 0;">
-    <p style="color: #ccc; line-height: 1.6; margin: 0;">
-    <b>CONMEBOL</b> e <b>CAF</b> apresentam os maiores índices de home advantage. Na América do Sul, a altitude de Quito e La Paz, 
-    somada às distâncias continentais, cria um caldeirão genuíno. Na África, a variabilidade de infraestrutura e clima 
-    entre regiões amplifica o efeito. A <b>UEFA</b> tem o índice mais baixo: infraestrutura equilibrada, menor variação geográfica 
-    e estádios modernos que nivelam as condições.
-    </p>
-    </div>
-    """, unsafe_allow_html=True)
-
 st.divider()
-st.subheader("⚖️ Análise Contextual do Confronto Selecionado")
+st.subheader("⚖️ Análise Contextual do Confronto")
 conf_h = get_confederation(home)
 conf_a = get_confederation(away)
-
-ctx = f"""
-<b>{home}</b> ({conf_h}) vs. <b>{away}</b> ({conf_a}).<br><br>
-{"Campo neutro ativado — a vantagem de casa é neutralizada. O jogo se torna puramente uma questão de força relativa." if neutral else
- f"Jogo em casa para <b>{home}</b>. Na <b>{conf_h}</b>, a vantagem de casa é {'significativa' if conf_h in ['CONMEBOL', 'CAF'] else 'moderada'}.<br>"}
-{"Confronto inter-confederação — adaptação tática, fuso horário e diferenças de estilo podem ser fatores decisivos." if conf_h != conf_a else
- "Confronto intra-confederação — familiaridade tática elevada, menos surpresas estratégicas."}
+ctx = f"""**{home}** ({conf_h}) vs. **{away}** ({conf_a}).
+{"Campo neutro — vantagem de casa neutralizada." if neutral else f"Jogo em casa para **{home}**. Na **{conf_h}**, a vantagem de casa é {'significativa' if conf_h in ['CONMEBOL', 'CAF'] else 'moderada'}."}
+{"Confronto inter-confederação — adaptação tática e fuso horário podem ser fatores." if conf_h != conf_a else "Confronto intra-confederação — familiaridade tática elevada."}
 """
-st.markdown(f"<div style='background:linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);padding:18px;border-radius:10px;margin:16px 0;'>"
-              f"<p style='margin:0;color:#ccc;line-height:1.6'>{ctx}</p></div>", unsafe_allow_html=True)
+st.markdown(ctx)
 
 if not neutral:
-    st.subheader("📉 Impacto da Neutralidade (Simulação)")
-    info_box("Comparamos as probabilidades do confronto em campo neutro vs. campo da casa. "
-             "A diferença mostra o 'preço' da neutralidade em termos de expectativa de resultado.",
-             type="info")
+    st.subheader("📉 Impacto da Neutralidade")
     res_neutral = predict_match(home, away, True, attack, defense, league_avg, elo_ratings, rho=-0.08)
     res_home = predict_match(home, away, False, attack, defense, league_avg, elo_ratings, rho=-0.08)
-
     delta_h = res_home['p_home'] - res_neutral['p_home']
     delta_d = res_home['p_draw'] - res_neutral['p_draw']
     delta_a = res_home['p_away'] - res_neutral['p_away']
-
     d1, d2, d3 = st.columns(3)
-    d1.metric(f"Δ Prob {home}", f"{delta_h:+.1%}", help="Ganho/perda de probabilidade com campo")
+    d1.metric(f"Δ Prob {home}", f"{delta_h:+.1%}")
     d2.metric("Δ Prob Empate", f"{delta_d:+.1%}")
     d3.metric(f"Δ Prob {away}", f"{delta_a:+.1%}")
-
     plot_waterfall([home, "Empate", away], [delta_h * 100, delta_d * 100, delta_a * 100],
                    title="Impacto da Vantagem de Campo (pp)")
