@@ -184,19 +184,19 @@ def team_consistency(history_df, team, n_last=20):
         return np.nan
     return s['rating'].std() / s['rating'].mean()
 
-def xg_efficiency(df, team, lookback_years=5):
+def xg_efficiency(history_df, team, lookback_years=5):
     """Gols reais / gols esperados (Poisson) — eficiência de conversão."""
-    cutoff = df['date'].max() - pd.Timedelta(days=365 * lookback_years)
-    tdf = df[((df['home_team'] == team) | (df['away_team'] == team)) & (df['date'] >= cutoff)]
+    cutoff = history_df['date'].max() - pd.Timedelta(days=365 * lookback_years)
+    tdf = history_df[((history_df['home_team'] == team) | (history_df['away_team'] == team)) & (history_df['date'] >= cutoff)]
     if tdf.empty:
         return np.nan, np.nan
     real_goals = 0
     exp_goals = 0
     for _, row in tdf.iterrows():
         if row['home_team'] == team:
-            real_goals += row['home_score']
+            real_goals += row['home_goals']
             exp_goals += row['home_expected'] * 2.5
         else:
-            real_goals += row['away_score']
+            real_goals += row['away_goals']
             exp_goals += row['away_expected'] * 2.5
     return real_goals / max(exp_goals, 0.1), real_goals / len(tdf)
