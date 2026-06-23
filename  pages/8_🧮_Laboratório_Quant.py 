@@ -1,7 +1,6 @@
 import streamlit as st
 import numpy as np
 import pandas as pd
-
 from core.data_loader import load_data, get_processed_data, LOOKBACK_YEARS
 from core.poisson_engine import predict_match
 from core.scenario_engine import sensitivity_analysis, scenario_matrix, what_if_elo_shift
@@ -15,103 +14,54 @@ st.set_page_config(page_title="Laboratório Quant", layout="wide")
 df = load_data()
 elo_ratings, elo_history, attack, defense, league_avg = get_processed_data(df, LOOKBACK_YEARS)
 teams = sorted(list(elo_ratings.keys()))
-
 state = render_sidebar(teams)
 home, away, neutral = state['home_team'], state['away_team'], state['neutral']
 
-st.markdown("<h2>🧮 Laboratório Quant</h2>", unsafe_allow_html=True)
-st.markdown("""
-<p style='color:#888; line-height:1.6;'>
-<b>A ciência da incerteza.</b> Nenhum modelo é perfeito. A pergunta não é "o modelo acerta?" — 
-é "o modelo sabe quando pode errar?". Aqui exploramos a robustez do motor Elo-Poisson-Dixon-Coles: 
-como pequenas mudanças nos inputs alteram as saídas, e como o parâmetro ρ (dependência entre gols) 
-molda toda a distribuição de probabilidades.
-</p>
-""", unsafe_allow_html=True)
+st.title("🧮 Laboratório Quant")
+st.markdown("A ciência da incerteza. Nenhum modelo é perfeito. A pergunta é: o modelo sabe quando pode errar?")
 
-# --- Seção 1: Análise de Sensibilidade ---
 st.divider()
 st.subheader("📉 Análise de Sensibilidade Elo")
-info_box("Variamos artificialmente o Elo do time da casa de -400 a +400 pontos e observamos como as probabilidades "
-         "de vitória, empate e derrota se comportam. Curvas suaves indicam robustez. Curvas íngremes indicam "
-         "que o confronto está em uma 'zona de transição' onde pequenas mudanças de força alteram drasticamente o resultado esperado.",
-         type="info")
-
-shift_range = st.slider("Range de Variação Elo", -400, 400, (-200, 200), step=50)
-n_points = st.slider("Pontos de simulação", 5, 21, 9)
-
+info_box("Variamos o Elo do time da casa de -400 a +400 e observamos como as probabilidades se comportam.", type="info")
+shift_range = st.slider("Range", -400, 400, (-200, 200), step=50)
+n_points = st.slider("Pontos", 5, 21, 9)
 if st.button("🔬 Executar Sensibilidade", type="primary"):
-    with st.spinner("Calculando curvas de sensibilidade..."):
-        sens_df = sensitivity_analysis(home, away, neutral, attack, defense, league_avg, elo_ratings,
-                                       elo_shift_range=shift_range, n_points=n_points)
+    with st.spinner("Calculando..."):
+        sens_df = sensitivity_analysis(home, away, neutral, attack, defense, league_avg, elo_ratings, elo_shift_range=shift_range, n_points=n_points)
     plot_sensitivity(sens_df)
-    styled_table(sens_df, {'Prob Casa': '{:.1%}', 'Prob Empate': '{:.1%}', 'Prob Fora': '{:.1%}',
-                           'xG Casa': '{:.2f}', 'xG Fora': '{:.2f}', 'Supremacy': '{:.2f}'})
+    styled_table(sens_df, {'Prob Casa': '{:.1%}', 'Prob Empate': '{:.1%}', 'Prob Fora': '{:.1%}', 'xG Casa': '{:.2f}', 'xG Fora': '{:.2f}', 'Supremacy': '{:.2f}'})
 
-# --- Seção 2: Matriz de Cenários ---
 st.divider()
 st.subheader("🎭 Matriz de Cenários")
-info_box("Comparamos 5 contextos diferentes para o mesmo confronto: neutro, casa normal, casa com pressão extra (+50 Elo), "
-         "casa com desfalques (-50 Elo), e visitante em ascensão (+50 Elo). Isso mostra a 'elasticidade' do confronto.",
-         type="info")
-
 if st.button("🎲 Gerar Cenários", type="primary"):
-    with st.spinner("Calculando cenários..."):
+    with st.spinner("Calculando..."):
         scen_df = scenario_matrix(home, away, attack, defense, league_avg, elo_ratings)
     styled_table(scen_df)
     plot_scenario_radar(scen_df, home, away)
 
-# --- Seção 3: What-If Elo Shift ---
 st.divider()
 st.subheader("🌍 What-If: Impacto Global de Elo")
-info_box("Simulamos o efeito cascata de uma mudança de Elo em um único time. Se o Brasil ganha +100 Elo por um título, "
-         "quantas posições ele sobe? E quem é empurrado para baixo? O futebol internacional é um sistema zero-sum: "
-         "a ascensão de um é relativa à queda de outro.",
-         type="info")
-
-whatif_team = st.selectbox("Time para simular mudança", teams, index=teams.index(home))
+whatif_team = st.selectbox("Time", teams, index=teams.index(home))
 whatif_shift = st.slider("Δ Elo", -200, 200, 50)
-
 if st.button("🌍 Calcular Impacto Global", type="primary"):
-    with st.spinner("Recalculando ranking global..."):
+    with st.spinner("Recalculando..."):
         impact_df = what_if_elo_shift(elo_ratings, whatif_team, whatif_shift, teams)
     st.subheader(f"Impacto de {whatif_shift:+.0f} Elo para {whatif_team}")
-    styled_table(impact_df.head(20), {'Elo Original': '{:.0f}', 'Elo Novo': '{:.0f}',
-                                        'Posição Original': '{:.0f}', 'Posição Nova': '{:.0f}',
-                                        'Δ Posição': '{:+.0f}'})
-
+    styled_table(impact_df.head(20), {'Elo Original': '{:.0f}', 'Elo Novo': '{:.0f}', 'Posição Original': '{:.0f}', 'Posição Nova': '{:.0f}', 'Δ Posição': '{:+.0f}'})
     most_impacted = impact_df.nlargest(10, 'Δ Posição')
     import plotly.express as px
-    fig = px.bar(most_impacted, x='Seleção', y='Δ Posição',
-                 title=f"Times Mais Impactados por {whatif_shift:+.0f} Elo em {whatif_team}",
-                 color='Δ Posição', color_continuous_scale='RdYlGn')
+    fig = px.bar(most_impacted, x='Seleção', y='Δ Posição', title="Times Mais Impactados", color='Δ Posição', color_continuous_scale='RdYlGn')
     fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
     st.plotly_chart(fig, use_container_width=True)
 
-# --- Seção 4: Robustez do Modelo ---
 st.divider()
-st.subheader("🛡️ Robustez do Modelo Poisson-Dixon-Coles")
-info_box("O parâmetro ρ (rho) controla o ajuste de dependência para empates de baixo placar. "
-         "ρ = 0 significa Poisson independente (sem correção). ρ = -0.08 é o valor padrão do futebol. "
-         "Testamos diferentes valores para mostrar a estabilidade (ou instabilidade) das predições.",
-         type="info")
-
+st.subheader("🛡️ Robustez do Modelo ρ")
+info_box("O parâmetro ρ controla a dependência entre gols. Testamos diferentes valores.", type="info")
 rho_values = [-0.15, -0.10, -0.08, -0.05, 0.0, 0.05]
 robust_rows = []
 for rho in rho_values:
     res = predict_match(home, away, neutral, attack, defense, league_avg, elo_ratings, rho=rho)
-    robust_rows.append({
-        'ρ (rho)': rho,
-        'Prob Casa': res['p_home'],
-        'Prob Empate': res['p_draw'],
-        'Prob Fora': res['p_away'],
-        'Supremacy': res['goal_supremacy']
-    })
+    robust_rows.append({'ρ (rho)': rho, 'Prob Casa': res['p_home'], 'Prob Empate': res['p_draw'], 'Prob Fora': res['p_away'], 'Supremacy': res['goal_supremacy']})
 robust_df = pd.DataFrame(robust_rows)
-styled_table(robust_df, {'Prob Casa': '{:.1%}', 'Prob Empate': '{:.1%}', 'Prob Fora': '{:.1%}',
-                         'Supremacy': '{:.2f}'})
-
-info_box("<b>Interpretação:</b> ρ negativo indica que empates de baixo placar (0-0, 1-0, 0-1, 1-1) são mais prováveis "
-         "do que o Poisson independente preveria. Isso é típico do futebol: quando o placar está apertado, times tendem a "
-         "'fechar' o jogo, reduzindo a taxa de gols. O modelo sem ρ (ρ=0) superestima vitórias e subestima empates.",
-         type="info")
+styled_table(robust_df, {'Prob Casa': '{:.1%}', 'Prob Empate': '{:.1%}', 'Prob Fora': '{:.1%}', 'Supremacy': '{:.2f}'})
+info_box("ρ negativo indica que empates de baixo placar são mais prováveis do que o Poisson independente preveria. O modelo sem ρ (ρ=0) superestima vitórias.", type="info")
