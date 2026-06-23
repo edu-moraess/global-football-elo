@@ -19,6 +19,8 @@ LOOKBACK_YEARS = 10
 def load_data():
     df = pd.read_csv("data/results.csv")
     df['date'] = pd.to_datetime(df['date'])
+    # Remover jogos sem placar (jogos futuros ou cancelados)
+    df = df.dropna(subset=['home_score', 'away_score'])
     return df
 
 # ================= UI SETUP =================
@@ -28,8 +30,12 @@ apply_custom_styles()
 st.markdown("<h1 class='main-header'>🏆 World Cup Football Quant Intelligence</h1>", unsafe_allow_html=True)
 
 df = load_data()
-elo_ratings, elo_history = compute_elo_history(df, LOOKBACK_YEARS)
-teams = sorted(list(elo_ratings.keys()))
+try:
+    elo_ratings, elo_history = compute_elo_history(df, LOOKBACK_YEARS)
+    teams = sorted(list(elo_ratings.keys()))
+except Exception as e:
+    st.error(f"Erro ao processar dados de Elo: {e}")
+    st.stop()
 
 # Sidebar: Ranking
 st.sidebar.markdown(f"<h2 style='color:{WC_COLORS['maroon']}'>🌍 Top 20 Global</h2>", unsafe_allow_html=True)
@@ -113,11 +119,15 @@ with tab3:
     h_a = elo_history[(elo_history['home_team'] == away_team) | (elo_history['away_team'] == away_team)].tail(30)
     
     def get_series(df_t, team):
+        if df_t.empty:
+            return []
         return [r['home_rating_after'] if r['home_team'] == team else r['away_rating_after'] for _, r in df_t.iterrows()]
 
     fig_evol = go.Figure()
-    fig_evol.add_trace(go.Scatter(x=h_h['date'], y=get_series(h_h, home_team), name=home_team, line=dict(color=WC_COLORS['maroon'], width=3)))
-    fig_evol.add_trace(go.Scatter(x=h_a['date'], y=get_series(h_a, away_team), name=away_team, line=dict(color=WC_COLORS['navy'], width=3)))
+    if not h_h.empty:
+        fig_evol.add_trace(go.Scatter(x=h_h['date'], y=get_series(h_h, home_team), name=home_team, line=dict(color=WC_COLORS['maroon'], width=3)))
+    if not h_a.empty:
+        fig_evol.add_trace(go.Scatter(x=h_a['date'], y=get_series(h_a, away_team), name=away_team, line=dict(color=WC_COLORS['navy'], width=3)))
     fig_evol.update_layout(xaxis_title="Data", yaxis_title="Elo Rating")
     st.plotly_chart(fig_evol, use_container_width=True)
 

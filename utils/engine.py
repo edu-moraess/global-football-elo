@@ -57,7 +57,10 @@ def compute_elo_history(df, lookback_years=10):
         res_home = 1 if home_goals > away_goals else (0.5 if home_goals == away_goals else 0)
         
         weight = TOURNAMENT_WEIGHTS.get(tournament, 20)
-        gd = abs(home_goals - away_goals)
+        try:
+            gd = abs(float(home_goals) - float(away_goals))
+        except (ValueError, TypeError):
+            gd = 0
         k = K_FACTOR_BASE * (weight / 30.0) * goal_diff_multiplier(gd)
         
         ratings[home] = r_home + k * (res_home - exp_home)
