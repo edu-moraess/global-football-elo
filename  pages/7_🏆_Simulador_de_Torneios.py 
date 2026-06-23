@@ -1,0 +1,108 @@
+import streamlit as st
+import pandas as pd
+import numpy as np
+
+from core.data_loader import load_data, get_processed_data, LOOKBACK_YEARS
+from core.tournament_engine import simulate_group_stage, simulate_knockout, simulate_full_tournament
+from components.sidebar import render_sidebar
+from components.charts import plot_tournament_probs
+from components.tables import styled_table
+from components.cards import info_box
+
+st.set_page_config(page_title="Simulador de Torneios", layout="wide")
+
+df = load_data()
+elo_ratings, elo_history, attack, defense, league_avg = get_processed_data(df, LOOKBACK_YEARS)
+teams = sorted(list(elo_ratings.keys()))
+
+state = render_sidebar(teams)
+
+st.markdown("<h2>🏆 Simulador de Torneios</h2>", unsafe_allow_html=True)
+st.markdown("""
+<p style='color:#888; line-height:1.6;'>
+<b>"O que aconteceria se...?"</b> Esta é a pergunta mais fascinante do futebol. 
+Simulamos milhares de universos paralelos onde o mesmo torneio é jogado repetidamente, 
+respeitando as forças reais de cada time mas abraçando a aleatoriedade do esporte. 
+Não é predição — é <b>exploração de possibilidades</b>.
+</p>
+""", unsafe_allow_html=True)
+
+mode = st.radio("Modo de Simulação", ["Grupo (4 times)", "Mata-Mata (2 times)", "Torneio Completo (32 times)"], horizontal=True)
+
+if mode == "Grupo (4 times)":
+    st.subheader("⚙️ Configurar Grupo")
+    info_box("Simula um grupo da fase de grupos (modelo Copa do Mundo). Cada time joga contra todos os outros uma vez. "
+             "O resultado é uma classificação média após milhares de simulações independentes.",
+             type="info")
+    col1, col2, col3, col4 = st.columns(4)
+    g1 = col1.selectbox("Time 1", teams, index=teams.index(state['home_team']))
+    g2 = col2.selectbox("Time 2", teams, index=teams.index(state['away_team']))
+    g3 = col3.selectbox("Time 3", teams, index=teams.index("France") if "France" in teams else 0)
+    g4 = col4.selectbox("Time 4", teams, index=teams.index("Germany") if "Germany" in teams else 0)
+
+    if len(set([g1, g2, g3, g4])) != 4:
+        st.error("Selecione 4 times diferentes.")
+    else:
+        n_sim = st.slider("Simulações", 100, 5000, 1000, step=100)
+        if st.button("🚀 Simular Grupo", type="primary"):
+            with st.spinner("Simulando milhares de universos paralelos..."):
+                result = simulate_group_stage([g1, g2, g3, g4], attack, defense, league_avg, elo_ratings, n_sim=n_sim)
+            st.subheader("📊 Classificação Média do Grupo")
+            styled_table(result, {'pts': '{:.1f}', 'gf': '{:.1f}', 'ga': '{:.1f}', 'GD': '{:.1f}', 'w': '{:.1f}', 'd': '{:.1f}', 'l': '{:.1f}'})
+
+            import plotly.express as px
+            fig = px.bar(result, x='Seleção', y='pts', color='pts',
+                         title="Pontuação Média Esperada",
+                         color_continuous_scale='RdYlGn')
+            fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
+            st.plotly_chart(fig, use_container_width=True)
+
+elif mode == "Mata-Mata (2 times)":
+    st.subheader("⚔️ Confronto Direto — Mata-Mata")
+    info_box("Mata-mata não permite empates. Se o placar simulado for igual, adicionamos prorrogação (30% dos lambdas Poisson). "
+             "Se persistir, o desempate é aleatório com peso das probabilidades.",
+             type="info")
+    ko_h = st.selectbox("Time A", teams, index=teams.index(state['home_team']))
+    ko_a = st.selectbox("Time B", teams, index=teams.index(state['away_team']))
+    n_sim_ko = st.slider("Simulações", 1000, 50000, 10000, step=1000)
+
+    if st.button("🚀 Simular Mata-Mata", type="primary"):
+        with st.spinner("Calculando probabilidades de eliminação..."):
+            ko_res = simulate_knockout(ko_h, ko_a, attack, defense, league_avg, elo_ratings, n_sim=n_sim_ko)
+
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric(f"Prob {ko_h}", f"{ko_res['prob_a']:.1%}")
+        c2.metric(f"Prob {ko_a}", f"{ko_res['prob_b']:.1%}")
+        c3.metric(f"xG {ko_h}", f"{ko_res['avg_goals_a']:.2f}")
+        c4.metric(f"xG {ko_a}", f"{ko_res['avg_goals_b']:.2f}")
+
+        import plotly.graph_objects as go
+        fig = go.Figure(data=[go.Pie(
+            labels=[ko_h, ko_a], values=[ko_res['prob_a'], ko_res['prob_b']],
+            hole=0.5, marker_colors=['#e94560', '#0f3460']
+        )])
+        fig.update_layout(showlegend=False, title="Probabilidade de Vitória",
+                          paper_bgcolor='rgba(0,0,0,0)')
+        st.plotly_chart(fig, use_container_width=True)
+
+else:  # Torneio Completo
+    st.subheader("🌍 Simular Copa do Mundo (32 times)")
+    info_box("Simula um torneio completo: 8 grupos de 4 → oitavas → quartas → semi → final. "
+             "Cada simulação é independente, respeitando as forças Poisson-Elo de cada seleção.",
+             type="info")
+
+    top32 = sorted(elo_ratings.items(), key=lambda x: x[1], reverse=True)[:32]
+    default_teams = [t[0] for t in top32]
+
+    selected = st.multiselect("Seleções participantes (32)", teams, default=default_teams)
+    if len(selected) != 32:
+        st.warning(f"Selecione exatamente 32 times. Atual: {len(selected)}")
+    else:
+        n_sim_t = st.slider("Simulações do Torneio", 100, 5000, 1000, step=100)
+        if st.button("🚀 Simular Torneio Completo", type="primary"):
+            with st.spinner("Simulando torneio completo... Isso pode levar alguns segundos."):
+                t_res = simulate_full_tournament(selected, attack, defense, league_avg, elo_ratings, n_sim=n_sim_t)
+            st.subheader("🏆 Probabilidades de Título (Top 16)")
+            plot_tournament_probs(t_res)
+            st.subheader("📋 Tabela Completa")
+            styled_table(t_res.head(32), {'title': '{:.1%}', 'final': '{:.1%}', 'semi': '{:.1%}', 'quarter': '{:.1%}', 'round16': '{:.1%}'})
