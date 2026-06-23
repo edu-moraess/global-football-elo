@@ -1,0 +1,163 @@
+"""
+Simulador de torneios: grupos e mata-mata.
+Baseado em Monte Carlo com modelo Poisson-Elo.
+"""
+import numpy as np
+import pandas as pd
+from .poisson_engine import predict_match
+
+
+def _simulate_single_group(teams, attack, defense, league_avg, elo_ratings):
+    """
+    Simula uma única rodada de grupo (determinístico com Poisson).
+    Retorna dict com pontos, gols, etc.
+    """
+    standings = {t: {'pts': 0, 'gf': 0, 'ga': 0, 'w': 0, 'd': 0, 'l': 0} for t in teams}
+    
+    for i in range(4):
+        for j in range(i+1, 4):
+            h, a = teams[i], teams[j]
+            res = predict_match(h, a, True, attack, defense, league_avg, elo_ratings, rho=-0.08)
+            gh = np.random.poisson(res['l_home'])
+            ga = np.random.poisson(res['l_away'])
+
+            standings[h]['gf'] += gh
+            standings[h]['ga'] += ga
+            standings[a]['gf'] += ga
+            standings[a]['ga'] += gh
+
+            if gh > ga:
+                standings[h]['pts'] += 3
+                standings[h]['w'] += 1
+                standings[a]['l'] += 1
+            elif gh == ga:
+                standings[h]['pts'] += 1
+                standings[a]['pts'] += 1
+                standings[h]['d'] += 1
+                standings[a]['d'] += 1
+            else:
+                standings[a]['pts'] += 3
+                standings[a]['w'] += 1
+                standings[h]['l'] += 1
+
+    return standings
+
+
+def simulate_group_stage(teams, attack, defense, league_avg, elo_ratings, n_sim=1000):
+    """
+    Simula uma fase de grupos round-robin.
+    teams: lista de 4 times (grupo)
+    Retorna: DataFrame com classificação média, pontos, saldo, etc.
+    """
+    if len(teams) != 4:
+        raise ValueError("Grupo deve ter exatamente 4 times.")
+
+    standings = {t: {'pts': 0, 'gf': 0, 'ga': 0, 'w': 0, 'd': 0, 'l': 0} for t in teams}
+
+    np.random.seed(42)
+    for _ in range(n_sim):
+        sim = _simulate_single_group(teams, attack, defense, league_avg, elo_ratings)
+        for t in teams:
+            for k in standings[t]:
+                standings[t][k] += sim[t][k] / n_sim
+
+    df = pd.DataFrame.from_dict(standings, orient='index')
+    df['GD'] = df['gf'] - df['ga']
+    df = df.sort_values(['pts', 'GD', 'gf'], ascending=False)
+    df.index.name = 'Seleção'
+    return df.reset_index()
+
+
+def simulate_knockout(team_a, team_b, attack, defense, league_avg, elo_ratings, n_sim=10000):
+    """
+    Simula mata-mata (sem empates — prorrogação/penaltis).
+    Retorna: probabilidade de vitória de A, média de gols.
+    """
+    np.random.seed(42)
+    wins_a = 0
+    total_goals_a = 0
+    total_goals_b = 0
+
+    for _ in range(n_sim):
+        res = predict_match(team_a, team_b, True, attack, defense, league_avg, elo_ratings, rho=-0.08)
+        gh = np.random.poisson(res['l_home'])
+        ga = np.random.poisson(res['l_away'])
+
+        if gh == ga:
+            gh += np.random.poisson(res['l_home'] * 0.3)
+            ga += np.random.poisson(res['l_away'] * 0.3)
+
+        if gh > ga:
+            wins_a += 1
+        total_goals_a += gh
+        total_goals_b += ga
+
+    return {
+        'prob_a': wins_a / n_sim,
+        'prob_b': 1 - (wins_a / n_sim),
+        'avg_goals_a': total_goals_a / n_sim,
+        'avg_goals_b': total_goals_b / n_sim
+    }
+
+
+def simulate_full_tournament(teams, attack, defense, league_avg, elo_ratings, n_sim=1000):
+    """
+    Simula torneio completo: grupos → oitavas → quartas → semi → final.
+    teams: lista de 32 times (8 grupos de 4)
+    Retorna: DataFrame com probabilidade de título, final, semi, etc.
+    """
+    if len(teams) != 32:
+        raise ValueError("Torneio completo requer 32 times.")
+
+    results = {t: {'title': 0, 'final': 0, 'semi': 0, 'quarter': 0, 'round16': 0} for t in teams}
+
+    np.random.seed(42)
+    for _ in range(n_sim):
+        groups = [teams[i:i+4] for i in range(0, 32, 4)]
+        qualifiers = []
+        for grp in groups:
+            grp_res = _simulate_single_group(grp, attack, defense, league_avg, elo_ratings)
+            grp_df = pd.DataFrame.from_dict(grp_res, orient='index')
+            grp_df['GD'] = grp_df['gf'] - grp_df['ga']
+            grp_df = grp_df.sort_values(['pts', 'GD', 'gf'], ascending=False)
+            qualifiers.extend(grp_df.head(2).index.tolist())
+
+        round16_winners = []
+        for i in range(0, 16, 2):
+            ko = simulate_knockout(qualifiers[i], qualifiers[i+1], attack, defense, league_avg, elo_ratings, n_sim=1)
+            winner = qualifiers[i] if np.random.random() < ko['prob_a'] else qualifiers[i+1]
+            round16_winners.append(winner)
+            results[qualifiers[i]]['round16'] += 1
+            results[qualifiers[i+1]]['round16'] += 1
+
+        quarter_winners = []
+        for i in range(0, 8, 2):
+            ko = simulate_knockout(round16_winners[i], round16_winners[i+1], attack, defense, league_avg, elo_ratings, n_sim=1)
+            winner = round16_winners[i] if np.random.random() < ko['prob_a'] else round16_winners[i+1]
+            quarter_winners.append(winner)
+            results[round16_winners[i]]['quarter'] += 1
+            results[round16_winners[i+1]]['quarter'] += 1
+
+        semi_winners = []
+        for i in range(0, 4, 2):
+            ko = simulate_knockout(quarter_winners[i], quarter_winners[i+1], attack, defense, league_avg, elo_ratings, n_sim=1)
+            winner = quarter_winners[i] if np.random.random() < ko['prob_a'] else quarter_winners[i+1]
+            semi_winners.append(winner)
+            results[quarter_winners[i]]['semi'] += 1
+            results[quarter_winners[i+1]]['semi'] += 1
+
+        ko = simulate_knockout(semi_winners[0], semi_winners[1], attack, defense, league_avg, elo_ratings, n_sim=1)
+        champion = semi_winners[0] if np.random.random() < ko['prob_a'] else semi_winners[1]
+        runner = semi_winners[1] if champion == semi_winners[0] else semi_winners[0]
+
+        results[champion]['title'] += 1
+        results[champion]['final'] += 1
+        results[runner]['final'] += 1
+
+    for t in results:
+        for k in results[t]:
+            results[t][k] /= n_sim
+
+    df = pd.DataFrame.from_dict(results, orient='index')
+    df.index.name = 'Seleção'
+    return df.reset_index().sort_values('title', ascending=False)
