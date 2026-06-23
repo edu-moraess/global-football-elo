@@ -1,9 +1,6 @@
-"""
-Tabelas otimizadas — evita background_gradient pesado quando possível.
-"""
+"""Tabelas otimizadas."""
 import streamlit as st
 import pandas as pd
-
 
 def ranking_table(df, max_rows=50):
     display = df.head(max_rows).copy()
@@ -20,15 +17,12 @@ def ranking_table(df, max_rows=50):
             use_container_width=True, height=500
         )
 
-
 def top_scores_table(scores, n=5):
     df = pd.DataFrame(scores[:n], columns=["Placar", "Prob"])
     df['Prob'] = df['Prob'].map('{:.1%}'.format)
     st.table(df)
 
-
 def styled_table(df, format_dict=None):
-    """Tabela simples com formatação opcional."""
     if format_dict:
         st.dataframe(df.style.format(format_dict), use_container_width=True)
     else:
