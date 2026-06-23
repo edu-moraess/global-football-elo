@@ -1,14 +1,7 @@
-"""
-Componentes de cards e narrativas reutilizáveis.
-"""
+"""Cards e narrativas."""
 import streamlit as st
 
-
 def metric_cards(metrics, cols=4):
-    """
-    Renderiza cards de métricas em colunas.
-    metrics: list of dicts {'label': str, 'value': str, 'help': str, 'delta': str}
-    """
     columns = st.columns(cols)
     for i, m in enumerate(metrics):
         with columns[i % cols]:
@@ -19,9 +12,7 @@ def metric_cards(metrics, cols=4):
                 kwargs['delta'] = m['delta']
             st.metric(m['label'], m['value'], **kwargs)
 
-
 def narrative_card(title, content, caption=None):
-    """Card de narrativa com markdown."""
     st.markdown(
         f"<div style='background:linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);padding:18px;border-radius:10px;border-left:4px solid #e94560;margin-bottom:8px;'>"
         f"<h4 style='margin-top:0;color:#f0f0f0'>{title}</h4>"
@@ -31,9 +22,7 @@ def narrative_card(title, content, caption=None):
     if caption:
         st.caption(caption)
 
-
 def info_box(content, type="info"):
-    """Caixa informativa colorida."""
     colors = {
         "info": "linear-gradient(135deg, #0f3460 0%, #1a1a2e 100%)",
         "success": "linear-gradient(135deg, #1a5c3a 0%, #1a1a2e 100%)",
