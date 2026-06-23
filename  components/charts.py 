@@ -1,11 +1,8 @@
-"""
-Gráficos Plotly reutilizáveis.
-"""
+"""Gráficos Plotly."""
 import streamlit as st
 import plotly.graph_objects as go
 import plotly.express as px
 import numpy as np
-
 
 def plot_radar(categories, stats_h, stats_a, name_h, name_a, color_h='#e94560', color_a='#0f3460'):
     fig = go.Figure()
@@ -24,7 +21,6 @@ def plot_radar(categories, stats_h, stats_a, name_h, name_a, color_h='#e94560', 
     )
     st.plotly_chart(fig, use_container_width=True, key="radar_chart")
 
-
 def plot_scatter_conf(conf_stats):
     fig = px.scatter(
         conf_stats, x='Média Elo', y='Desvio', size='Seleções', color='Confederação',
@@ -36,7 +32,6 @@ def plot_scatter_conf(conf_stats):
     fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
     st.plotly_chart(fig, use_container_width=True, key="scatter_conf")
 
-
 def plot_bar_momentum(top_mom):
     fig = px.bar(
         top_mom, x='Momentum', y='Seleção', orientation='h', color='Momentum',
@@ -44,7 +39,6 @@ def plot_bar_momentum(top_mom):
     )
     fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
     st.plotly_chart(fig, use_container_width=True, key="bar_momentum")
-
 
 def plot_pie_probs(probs, labels, colors):
     fig = go.Figure(data=[go.Pie(
@@ -55,7 +49,6 @@ def plot_pie_probs(probs, labels, colors):
     fig.update_layout(showlegend=False, margin=dict(t=0, b=0, l=0, r=0),
                       paper_bgcolor='rgba(0,0,0,0)')
     st.plotly_chart(fig, use_container_width=True, key="pie_probs")
-
 
 def plot_heatmap_matrix(matrix, name_h, name_a):
     fig = px.imshow(
@@ -69,7 +62,6 @@ def plot_heatmap_matrix(matrix, name_h, name_a):
     fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
     st.plotly_chart(fig, use_container_width=True, key="heatmap_matrix")
 
-
 def plot_waterfall(x, y, title="Impacto"):
     fig = go.Figure(go.Waterfall(
         name="Impacto", orientation="v",
@@ -81,7 +73,6 @@ def plot_waterfall(x, y, title="Impacto"):
     fig.update_layout(title=title, yaxis_title="Δ Probabilidade (%)",
                       paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
     st.plotly_chart(fig, use_container_width=True, key="waterfall")
-
 
 def plot_evolution(s, team, color='#e94560'):
     fig = go.Figure()
@@ -113,7 +104,6 @@ def plot_evolution(s, team, color='#e94560'):
     )
     st.plotly_chart(fig, use_container_width=True, key=f"evol_{team}")
 
-
 def plot_timeline(h2h_df, home_team, away_team):
     fig = go.Figure()
     for _, row in h2h_df.iterrows():
@@ -137,9 +127,7 @@ def plot_timeline(h2h_df, home_team, away_team):
     )
     st.plotly_chart(fig, use_container_width=True, key="timeline_h2h")
 
-
 def plot_sensitivity(df):
-    """Gráfico de análise de sensibilidade Elo."""
     fig = go.Figure()
     fig.add_trace(go.Scatter(x=df['Elo Shift'], y=df['Prob Casa'], mode='lines+markers',
                                name='Prob Casa', line=dict(color='#e94560')))
@@ -155,9 +143,7 @@ def plot_sensitivity(df):
     )
     st.plotly_chart(fig, use_container_width=True, key="sensitivity_chart")
 
-
 def plot_tournament_probs(df):
-    """Gráfico de probabilidades de torneio."""
     fig = px.bar(
         df.head(16), x='Seleção', y=['title', 'final', 'semi', 'quarter'],
         title="Probabilidades de Avanço no Torneio (Top 16)",
@@ -167,9 +153,7 @@ def plot_tournament_probs(df):
     fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', barmode='group')
     st.plotly_chart(fig, use_container_width=True, key="tournament_probs")
 
-
 def plot_scenario_radar(scenarios_df, home_team, away_team):
-    """Radar comparativo de cenários."""
     fig = go.Figure()
     for _, row in scenarios_df.iterrows():
         vals = [row['Prob Casa'], row['Prob Empate'], row['Prob Fora']]
