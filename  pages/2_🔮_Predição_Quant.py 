@@ -1,6 +1,5 @@
 import streamlit as st
 import numpy as np
-
 from core.data_loader import load_data, get_processed_data, LOOKBACK_YEARS
 from core.poisson_engine import predict_match, monte_carlo
 from core.metrics_engine import elo_momentum, team_consistency, elo_efficiency
@@ -14,23 +13,14 @@ st.set_page_config(page_title="Predição Quant", layout="wide")
 df = load_data()
 elo_ratings, elo_history, attack, defense, league_avg = get_processed_data(df, LOOKBACK_YEARS)
 teams = sorted(list(elo_ratings.keys()))
-
 state = render_sidebar(teams)
 lookback = state['lookback']
 if lookback != LOOKBACK_YEARS:
     elo_ratings, elo_history, attack, defense, league_avg = get_processed_data(df, lookback)
-
 home, away, neutral = state['home_team'], state['away_team'], state['neutral']
 
-st.markdown("<h2>🔮 Predição Quant Avançada</h2>", unsafe_allow_html=True)
-st.markdown("""
-<p style='color:#888; line-height:1.6;'>
-O modelo Poisson-Dixon-Coles não adivinha o futuro. Ele <b>quantifica a incerteza</b>. 
-Cada célula da matriz de placares é uma probabilidade, não uma certeza. O futebol é o esporte mais imprevisível 
-do mundo — e este modelo respeita isso, ajustando a dependência entre gols (o famoso ρ de Dixon-Coles) 
-que faz empates 0-0 e 1-1 serem mais comuns do que a matemática pura prevê.
-</p>
-""", unsafe_allow_html=True)
+st.title("🔮 Predição Quant Avançada")
+st.markdown("O modelo não adivinha o futuro. Ele quantifica a incerteza.")
 
 res = predict_match(home, away, neutral, attack, defense, league_avg, elo_ratings, rho=-0.08)
 mc_h, mc_d, mc_a = monte_carlo(res['l_home'], res['l_away'], iterations=20000)
@@ -38,44 +28,26 @@ mc_h, mc_d, mc_a = monte_carlo(res['l_home'], res['l_away'], iterations=20000)
 elo_diff = res['elo_home'] - res['elo_away']
 supremacy = res['goal_supremacy']
 
-narr = f"""
-<b>{home}</b> ({res['elo_home']:.0f} Elo) vs. <b>{away}</b> ({res['elo_away']:.0f} Elo).<br>
-Diferença de rating: <b>{elo_diff:+.0f}</b> pontos.<br>
-Goal Supremacy projetado: <b>{supremacy:+.2f}</b> (expectativa de diferença de gols).<br>
-{"O modelo detecta <b>vantagem significativa</b> para a casa." if supremacy > 0.8 else
- "Confronto <b>equilibrado</b> — o empate é o cenário mais provável." if abs(supremacy) < 0.3 else
- "O modelo favorece <b>levemente</b> o visitante." if supremacy < -0.3 else
- "O modelo favorece <b>levemente</b> a casa."}
-"""
-st.markdown(f"<div style='background:linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);padding:18px;border-radius:10px;margin:16px 0;'>"
-              f"<p style='margin:0;color:#ccc;line-height:1.6'>{narr}</p></div>", unsafe_allow_html=True)
+st.markdown(f"**{home}** ({res['elo_home']:.0f} Elo) vs. **{away}** ({res['elo_away']:.0f} Elo). Diferença: {elo_diff:+.0f}. Supremacy: {supremacy:+.2f}")
 
 metric_cards([
     {'label': 'Elo Casa', 'value': f"{res['elo_home']:.0f}", 'delta': f"{elo_diff:+.0f}"},
     {'label': 'Elo Fora', 'value': f"{res['elo_away']:.0f}"},
     {'label': 'xG Casa', 'value': f"{res['xg_home']:.2f}"},
     {'label': 'xG Fora', 'value': f"{res['xg_away']:.2f}"},
-    {'label': 'Goal Supremacy', 'value': f"{supremacy:+.2f}"},
+    {'label': 'Supremacy', 'value': f"{supremacy:+.2f}"},
 ], cols=5)
 
 st.divider()
 c1, c2 = st.columns(2)
-
 with c1:
     st.subheader("🎲 Probabilidades (Monte Carlo 20k)")
-    info_box("Monte Carlo simula 20.000 jogos independentes usando as taxas Poisson estimadas. "
-             "O resultado é uma distribuição empírica que respeita a aleatoriedade do futebol.",
-             type="info")
     plot_pie_probs([mc_h, mc_d, mc_a], [home, "Empate", away], ['#e94560', '#f0f0f0', '#0f3460'])
     xp_h = (mc_h * 3) + (mc_d * 1)
     xp_a = (mc_a * 3) + (mc_d * 1)
-    st.info(f"**xP (Pontos Esperados):** {home}: {xp_h:.2f} | {away}: {xp_a:.2f}")
-
+    st.info(f"xP: {home}: {xp_h:.2f} | {away}: {xp_a:.2f}")
 with c2:
-    st.subheader("🎯 Matriz de Placares (Dixon-Coles)")
-    info_box("Cada célula mostra a probabilidade de um placar específico. "
-             "O ajuste ρ = -0.08 aumenta ligeiramente a probabilidade de empates 0-0, 1-0, 0-1 e 1-1.",
-             type="info")
+    st.subheader("🎯 Matriz de Placares")
     plot_heatmap_matrix(res['matrix'], home, away)
 
 st.divider()
@@ -85,7 +57,6 @@ with c3:
     scores.sort(key=lambda x: x[1], reverse=True)
     st.markdown("**Top 5 Placares Prováveis**")
     top_scores_table(scores)
-
 with c4:
     st.markdown("**Mercados de Gols & BTTS**")
     m = res['matrix']
