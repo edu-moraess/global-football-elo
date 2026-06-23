@@ -1,0 +1,128 @@
+"""
+Motor Elo otimizado para futebol internacional.
+Baseado no sistema de Arpad Elo, adaptado para futebol com K-factor dinâmico.
+"""
+import pandas as pd
+import numpy as np
+
+INITIAL_ELO = 1500
+
+CONFEDERATIONS = {
+    'UEFA': ['Albania', 'Andorra', 'Armenia', 'Austria', 'Azerbaijan', 'Belarus',
+             'Belgium', 'Bosnia and Herzegovina', 'Bulgaria', 'Croatia', 'Cyprus',
+             'Czech Republic', 'Denmark', 'England', 'Estonia', 'Faroe Islands',
+             'Finland', 'France', 'Georgia', 'Germany', 'Gibraltar', 'Greece',
+             'Hungary', 'Iceland', 'Ireland', 'Israel', 'Italy', 'Kazakhstan',
+             'Kosovo', 'Latvia', 'Liechtenstein', 'Lithuania', 'Luxembourg',
+             'Malta', 'Moldova', 'Monaco', 'Montenegro', 'Netherlands',
+             'North Macedonia', 'Northern Ireland', 'Norway', 'Poland', 'Portugal',
+             'Romania', 'Russia', 'San Marino', 'Scotland', 'Serbia', 'Slovakia',
+             'Slovenia', 'Spain', 'Sweden', 'Switzerland', 'Turkey', 'Ukraine',
+             'Wales'],
+    'CONMEBOL': ['Argentina', 'Bolivia', 'Brazil', 'Chile', 'Colombia', 'Ecuador',
+                 'Paraguay', 'Peru', 'Uruguay', 'Venezuela'],
+    'CONCACAF': ['Antigua and Barbuda', 'Bahamas', 'Barbados', 'Belize', 'Bermuda',
+                 'Canada', 'Costa Rica', 'Cuba', 'Dominica', 'Dominican Republic',
+                 'El Salvador', 'Grenada', 'Guatemala', 'Haiti', 'Honduras', 'Jamaica',
+                 'Mexico', 'Nicaragua', 'Panama', 'Saint Kitts and Nevis',
+                 'Saint Lucia', 'Saint Vincent and the Grenadines', 'Trinidad and Tobago',
+                 'United States'],
+    'CAF': ['Algeria', 'Angola', 'Benin', 'Botswana', 'Burkina Faso', 'Burundi',
+            'Cameroon', 'Cape Verde', 'Central African Republic', 'Chad', 'Comoros',
+            'Congo', 'Congo DR', 'Djibouti', 'Egypt', 'Equatorial Guinea', 'Eritrea',
+            'Eswatini', 'Ethiopia', 'Gabon', 'Gambia', 'Ghana', 'Guinea',
+            'Guinea-Bissau', 'Ivory Coast', 'Kenya', 'Lesotho', 'Liberia', 'Libya',
+            'Madagascar', 'Malawi', 'Mali', 'Mauritania', 'Mauritius', 'Morocco',
+            'Mozambique', 'Namibia', 'Niger', 'Nigeria', 'Rwanda', 'São Tomé and Príncipe',
+            'Senegal', 'Seychelles', 'Sierra Leone', 'Somalia', 'South Africa',
+            'South Sudan', 'Sudan', 'Tanzania', 'Togo', 'Tunisia', 'Uganda', 'Zambia', 'Zimbabwe'],
+    'AFC': ['Afghanistan', 'Australia', 'Bahrain', 'Bangladesh', 'Bhutan', 'Brunei',
+            'Cambodia', 'China', 'Guam', 'Hong Kong', 'India', 'Indonesia', 'Iran',
+            'Iraq', 'Japan', 'Jordan', 'Kuwait', 'Kyrgyzstan', 'Laos', 'Lebanon',
+            'Macau', 'Malaysia', 'Maldives', 'Mongolia', 'Myanmar', 'Nepal',
+            'North Korea', 'Oman', 'Pakistan', 'Palestine', 'Philippines', 'Qatar',
+            'Saudi Arabia', 'Singapore', 'South Korea', 'Sri Lanka', 'Syria',
+            'Tajikistan', 'Thailand', 'Timor-Leste', 'Turkmenistan', 'United Arab Emirates',
+            'Uzbekistan', 'Vietnam', 'Yemen'],
+    'OFC': ['American Samoa', 'Cook Islands', 'Fiji', 'New Caledonia', 'New Zealand',
+            'Papua New Guinea', 'Samoa', 'Solomon Islands', 'Tahiti', 'Tonga', 'Vanuatu']
+}
+
+TEAM_TO_CONF = {}
+for conf, teams in CONFEDERATIONS.items():
+    for t in teams:
+        TEAM_TO_CONF[t] = conf
+
+
+def get_confederation(team):
+    return TEAM_TO_CONF.get(team, 'Outros')
+
+
+def k_factor(elo, tournament, goal_diff):
+    """K-factor dinâmico baseado em rating, torneio e diferença de gols."""
+    base = 40 if elo < 2100 else 20 if elo < 2400 else 10
+    mult = {'FIFA World Cup': 1.5, 'Confederations Cup': 1.4,
+            'UEFA Euro': 1.3, 'Copa América': 1.3, 'AFC Asian Cup': 1.3,
+            'Africa Cup of Nations': 1.3, 'CONCACAF Gold Cup': 1.2,
+            'Oceania Nations Cup': 1.1, 'FIFA World Cup qualification': 1.0,
+            'UEFA Euro qualification': 1.0, 'Friendly': 0.8}
+    tm = mult.get(tournament, 1.0)
+    gd = 1 + (abs(goal_diff) - 1) * 0.5 if abs(goal_diff) > 1 else 1
+    return base * tm * gd
+
+
+def expected_score(elo_a, elo_b):
+    return 1 / (1 + 10 ** ((elo_b - elo_a) / 400))
+
+
+def compute_elo_history(df, lookback_years):
+    """
+    Computa ratings Elo e histórico completo.
+    Retorna: (elo_ratings dict, elo_history DataFrame)
+    """
+    from datetime import timedelta
+    cutoff = df['date'].max() - timedelta(days=365 * lookback_years)
+    df = df[df['date'] >= cutoff].sort_values('date').copy()
+
+    ratings = {}
+    history = []
+
+    for _, row in df.iterrows():
+        h, a = row['home_team'], row['away_team']
+        hs, aw = row['home_score'], row['away_score']
+
+        for t in (h, a):
+            if t not in ratings:
+                ratings[t] = INITIAL_ELO
+
+        elo_h, elo_a = ratings[h], ratings[a]
+        exp_h = expected_score(elo_h, elo_a)
+        exp_a = 1 - exp_h
+
+        if hs > aw:
+            actual_h, actual_a = 1, 0
+        elif hs == aw:
+            actual_h, actual_a = 0.5, 0.5
+        else:
+            actual_h, actual_a = 0, 1
+
+        k_h = k_factor(elo_h, row.get('tournament', 'Friendly'), hs - aw)
+        k_a = k_factor(elo_a, row.get('tournament', 'Friendly'), aw - hs)
+
+        ratings[h] = elo_h + k_h * (actual_h - exp_h)
+        ratings[a] = elo_a + k_a * (actual_a - exp_a)
+
+        history.append({
+            'date': row['date'], 'team': h, 'rating': ratings[h],
+            'opponent': a, 'home': True, 'goals_for': hs, 'goals_against': aw,
+            'result': 1 if hs > aw else 0.5 if hs == aw else 0,
+            'expected': exp_h, 'tournament': row.get('tournament', 'Friendly')
+        })
+        history.append({
+            'date': row['date'], 'team': a, 'rating': ratings[a],
+            'opponent': h, 'home': False, 'goals_for': aw, 'goals_against': hs,
+            'result': 1 if aw > hs else 0.5 if aw == hs else 0,
+            'expected': exp_a, 'tournament': row.get('tournament', 'Friendly')
+        })
+
+    return ratings, pd.DataFrame(history)
