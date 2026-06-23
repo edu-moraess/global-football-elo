@@ -1,17 +1,9 @@
-"""
-Sidebar compartilhado entre todas as páginas.
-Gerencia estado global: times selecionados, campo neutro, janela temporal.
-"""
+"""Sidebar compartilhado."""
 import streamlit as st
 
-
 def render_sidebar(teams, default_home="Brazil", default_away="Argentina"):
-    """
-    Renderiza a sidebar e retorna dict com estado selecionado.
-    Usa st.session_state para persistir entre navegações de página.
-    """
-    st.sidebar.markdown("<h1 style='text-align:center;'>⚽ Quant Football</h1>", unsafe_allow_html=True)
-    st.sidebar.markdown("<p style='text-align:center; color:#888; font-size:0.85em;'>Global Football Quant Intelligence</p>", unsafe_allow_html=True)
+    st.sidebar.markdown("<h2 style='text-align:center;'>⚽ Quant Football</h2>", unsafe_allow_html=True)
+    st.sidebar.caption("Análise Quantitativa de Futebol")
     st.sidebar.divider()
 
     if 'home_team' not in st.session_state:
