@@ -1,14 +1,5 @@
-# Core
-streamlit==1.41.1
-pandas==2.2.3
-numpy==1.26.4
-
-# Visualização
-plotly==5.24.1
-
-# Computação científica (Elo, Poisson, sinais, estatísticas)
-scipy==1.14.1
-
-# Dependências de segurança do Streamlit Cloud
-protobuf==4.25.5
-pillow==10.4.0
+streamlit>=1.40.0
+pandas>=2.2.0
+numpy>=1.26.0
+plotly>=5.24.0
+scipy>=1.14.0
