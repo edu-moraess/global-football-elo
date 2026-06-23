@@ -1,7 +1,6 @@
 import streamlit as st
 import numpy as np
 from scipy.signal import find_peaks
-
 from core.data_loader import load_data, get_processed_data, LOOKBACK_YEARS
 from core.metrics_engine import get_team_history, golden_window, generation_cycles
 from components.sidebar import render_sidebar
@@ -13,18 +12,10 @@ st.set_page_config(page_title="Evolução Temporal", layout="wide")
 df = load_data()
 elo_ratings, elo_history, attack, defense, league_avg = get_processed_data(df, LOOKBACK_YEARS)
 teams = sorted(list(elo_ratings.keys()))
-
 state = render_sidebar(teams)
 
-st.markdown("<h2>🧬 Evolução Temporal</h2>", unsafe_allow_html=True)
-st.markdown("""
-<p style='color:#888; line-height:1.6;'>
-Cada pico no gráfico de Elo é uma geração dourada. Cada vale é uma transição dolorosa. 
-A Espanha de 2008-2012 foi um pico. A Itália pós-2006 foi um declínio gradual. 
-Aqui não vemos apenas números — vemos <b>história em movimento</b>. A banda cinza representa a volatilidade: 
-quanto mais larga, mais instável foi o período.
-</p>
-""", unsafe_allow_html=True)
+st.title("🧬 Evolução Temporal")
+st.markdown("Cada pico é uma geração dourada. Cada vale é uma transição dolorosa. Aqui vemos história em movimento.")
 
 for team in [state['home_team'], state['away_team']]:
     st.divider()
@@ -33,34 +24,23 @@ for team in [state['home_team'], state['away_team']]:
     if s.empty or len(s) < 5:
         st.warning(f"Dados insuficientes para {team}.")
         continue
-
     plot_evolution(s, team)
-
     ratings_arr = s['rating'].values
     peaks, _ = find_peaks(ratings_arr, distance=10, prominence=15)
     valleys, _ = find_peaks(-ratings_arr, distance=10, prominence=15)
     cycles = generation_cycles(elo_history, team)
-
     if len(peaks) > 0 or len(valleys) > 0:
-        st.caption(f"**Ciclos detectados**: {len(peaks)} picos, {len(valleys)} vales. "
-                   f"Duração média entre picos: {cycles['duracao_media']:.0f} jogos. "
-                   f"Amplitude média: {cycles['amplitude']:.0f} pts Elo. "
-                   f"Cada ciclo representa aproximadamente uma geração de jogadores ou uma mudança tática estrutural.")
+        st.caption(f"**Ciclos**: {len(peaks)} picos, {len(valleys)} vales. Duração média: {cycles['duracao_media']:.0f}j. Amplitude: {cycles['amplitude']:.0f} pts.")
     else:
-        st.caption("Nenhum ciclo claro detectado — evolução relativamente linear, sugerindo estabilidade institucional.")
-
+        st.caption("Nenhum ciclo claro — evolução linear, sugerindo estabilidade institucional.")
     gw_start, gw_end = golden_window(elo_history, team, min_window=8, threshold_pct=0.95)
     if gw_start and gw_end:
-        st.success(f"🏆 **Janela de Ouro detectada**: {gw_start.strftime('%Y-%m-%d')} → {gw_end.strftime('%Y-%m-%d')} — "
-                   f"período onde o time operou acima de 95% do seu pico de performance.")
+        st.success(f"🏆 **Janela de Ouro**: {gw_start.strftime('%Y-%m-%d')} → {gw_end.strftime('%Y-%m-%d')}")
     else:
-        st.info("Sem janela de ouro clara no período (requer mínimo 8 jogos consecutivos acima do threshold).")
+        st.info("Sem janela de ouro clara no período.")
 
 st.divider()
 st.subheader("🔄 Comparativo Temporal Cruzado")
-info_box("Sobrepondo as curvas de Elo de ambos os times, podemos identificar momentos históricos onde as trajetórias se cruzaram — "
-         "indicando mudanças de poder e eras de domínio alternado.",
-         type="info")
 s_h = get_team_history(elo_history, state['home_team'], n_last=200)
 s_a = get_team_history(elo_history, state['away_team'], n_last=200)
 if not s_h.empty and not s_a.empty:
