@@ -1,51 +1,36 @@
 import streamlit as st
 import pandas as pd
 from datetime import timedelta
-
 from core.data_loader import load_data, get_processed_data, LOOKBACK_YEARS
 from core.metrics_engine import h2h_psychological_edge
 from components.sidebar import render_sidebar
 from components.charts import plot_timeline
-from components.cards import info_box, narrative_card
+from components.cards import info_box
 
 st.set_page_config(page_title="Confronto Histórico", layout="wide")
 
 df = load_data()
 elo_ratings, elo_history, attack, defense, league_avg = get_processed_data(df, LOOKBACK_YEARS)
 teams = sorted(list(elo_ratings.keys()))
-
 state = render_sidebar(teams)
 home, away = state['home_team'], state['away_team']
 
-st.markdown("<h2>⚔️ Confronto Histórico Profundo</h2>", unsafe_allow_html=True)
-st.markdown("""
-<p style='color:#888; line-height:1.6;'>
-O futebol tem memória. Um time que venceu 5 vezes seguidas carrega um peso psicológico que os números 
-não capturam sozinhos. Esta página une estatística e história: cada ponto no gráfico é um capítulo 
-de uma rivalidade que pode ter décadas de existência.
-</p>
-""", unsafe_allow_html=True)
+st.title("⚔️ Confronto Histórico Profundo")
+st.markdown("O futebol tem memória. Cada ponto no gráfico é um capítulo de uma rivalidade.")
 
 h2h_data = h2h_psychological_edge(df, home, away, lookback_years=30)
-
 if h2h_data['total'] > 0:
     first_year = h2h_data['first_match'].year if h2h_data['first_match'] else '?'
     last_year = h2h_data['last_match'].year if h2h_data['last_match'] else '?'
-    narr = f"""
-    Nos últimos <b>30 anos</b>, <b>{home}</b> e <b>{away}</b> se enfrentaram <b>{h2h_data['total']}</b> vezes.<br>
-    O primeiro confronto registrado foi em <b>{first_year}</b>; o mais recente em <b>{last_year}</b>.<br><br>
-    <b>{home}</b> venceu <b>{h2h_data['wins_a']}</b> vezes.<br>
-    <b>{away}</b> venceu <b>{h2h_data['wins_b']}</b> vezes.<br>
-    <b>{h2h_data['draws']}</b> empates.<br>
-    Saldo de gols: <b>{h2h_data['gd_sum']:+d}</b> para {home}.<br><br>
-    {f"<b>Domínio psicológico ativo</b>: {h2h_data['streak']} vitórias consecutivas." if h2h_data['streak'] >= 2 else "Sem sequência de domínio atual."}<br>
-    Classificação de edge: <b>{h2h_data['edge']}</b> (score: {h2h_data['dominance']:.2f}).
-    """
+    st.markdown(f"""
+    Nos últimos 30 anos, **{home}** e **{away}** se enfrentaram **{h2h_data['total']}** vezes.
+    Primeiro confronto: **{first_year}**. Mais recente: **{last_year}**.
+    **{home}** venceu **{h2h_data['wins_a']}** | **{away}** venceu **{h2h_data['wins_b']}** | **{h2h_data['draws']}** empates.
+    Saldo de gols: **{h2h_data['gd_sum']:+d}** para {home}.
+    Edge: **{h2h_data['edge']}** (score: {h2h_data['dominance']:.2f}).
+    """)
 else:
-    narr = "Sem histórico de confrontos diretos nos últimos 30 anos."
-
-st.markdown(f"<div style='background:linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);padding:18px;border-radius:10px;margin:16px 0;'>"
-              f"<p style='margin:0;color:#ccc;line-height:1.6'>{narr}</p></div>", unsafe_allow_html=True)
+    st.info("Sem histórico de confrontos diretos nos últimos 30 anos.")
 
 cutoff = df['date'].max() - timedelta(days=365 * 30)
 h2h_df = df[((df['home_team'] == home) & (df['away_team'] == away)) |
@@ -53,12 +38,7 @@ h2h_df = df[((df['home_team'] == home) & (df['away_team'] == away)) |
 h2h_df = h2h_df[h2h_df['date'] >= cutoff].sort_values('date')
 
 if not h2h_df.empty:
-    info_box("Cada ponto no gráfico representa um confronto. <b style='color:#e94560'>Vermelho</b> = vitória do time da casa, "
-             "<b style='color:#0f3460'>Azul</b> = vitória do visitante, <b>Cinza</b> = empate. "
-             "O eixo Y mostra a diferença de gols favorável ao time selecionado como 'casa'.",
-             type="info")
     plot_timeline(h2h_df, home, away)
-
     st.subheader("📊 Estatísticas do Confronto")
     h2h_df['gd_for_home'] = h2h_df.apply(
         lambda r: r['home_score'] - r['away_score'] if r['home_team'] == home else r['away_score'] - r['home_score'], axis=1)
@@ -66,14 +46,12 @@ if not h2h_df.empty:
     avg_goals = (h2h_df['home_score'] + h2h_df['away_score']).mean()
     btts_rate = ((h2h_df['home_score'] > 0) & (h2h_df['away_score'] > 0)).mean()
     over25 = ((h2h_df['home_score'] + h2h_df['away_score']) > 2.5).mean()
-
     k1, k2, k3, k4, k5 = st.columns(5)
     k1.metric("Média GD", f"{avg_gd:+.2f}")
     k2.metric("Média Gols", f"{avg_goals:.2f}")
     k3.metric("BTTS %", f"{btts_rate:.1%}")
     k4.metric("Over 2.5 %", f"{over25:.1%}")
     k5.metric("Jogos", len(h2h_df))
-
     results_map = []
     for _, row in h2h_df.iterrows():
         if row['home_team'] == home:
@@ -91,5 +69,3 @@ if not h2h_df.empty:
                      color_discrete_map={'Vitória Casa': '#e94560', 'Empate': '#888888', 'Vitória Fora': '#0f3460'})
     fig_res.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
     st.plotly_chart(fig_res, use_container_width=True)
-else:
-    st.info("Nenhum confronto direto encontrado no período.")
