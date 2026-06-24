@@ -1,67 +1,251 @@
 import streamlit as st
-import numpy as np
 import pandas as pd
-from core.data_loader import load_data, get_processed_data, LOOKBACK_YEARS
-from core.poisson_engine import predict_match
-from core.scenario_engine import sensitivity_analysis, scenario_matrix, what_if_elo_shift
-from components.sidebar import render_sidebar
-from components.charts import plot_sensitivity, plot_scenario_radar
-from components.tables import styled_table
-from components.cards import info_box
+import numpy as np
+import plotly.graph_objects as go
 
-st.set_page_config(page_title="Laboratório Quant", layout="wide")
+st.set_page_config(page_title="Laboratório Quant", layout="wide", page_icon="🧪")
 
-df = load_data()
-elo_ratings, elo_history, attack, defense, league_avg = get_processed_data(df, LOOKBACK_YEARS)
-teams = sorted(list(elo_ratings.keys()))
+from components import inject_css, render_sidebar, section_header, narrative_box, ticker_bar, stat_card
+from components.charts import plot_sensitivity
+from components.theme import GOLD, RED, GREEN, MUTED, BLUE, CARD, BORDER, TEXT
+from core.data_loader import load_all, LOOKBACK_YEARS
+from core.poisson_engine import predict_match, monte_carlo_match, score_distribution
+
+inject_css()
+
+df, elo, hist, att, defe, ha, rho, lavg, mdf = load_all(LOOKBACK_YEARS)
+teams = sorted(elo.keys())
 state = render_sidebar(teams)
 home, away, neutral = state['home_team'], state['away_team'], state['neutral']
 
-st.title("🧮 Laboratório Quant")
-st.markdown("A ciência da incerteza. Nenhum modelo é perfeito. A pergunta é: o modelo sabe quando pode errar?")
+st.markdown("<h1>🧪 Laboratório Quant</h1>", unsafe_allow_html=True)
+st.caption("Análise de sensibilidade · Cenários what-if · Kelly Criterion · Backtesting de calibração")
 
-st.divider()
-st.subheader("📉 Análise de Sensibilidade Elo")
-info_box("Variamos o Elo do time da casa de -400 a +400 e observamos como as probabilidades se comportam.", type="info")
-shift_range = st.slider("Range", -400, 400, (-200, 200), step=50)
-n_points = st.slider("Pontos", 5, 21, 9)
-if st.button("🔬 Executar Sensibilidade", type="primary"):
-    with st.spinner("Calculando..."):
-        sens_df = sensitivity_analysis(home, away, neutral, attack, defense, league_avg, elo_ratings, elo_shift_range=shift_range, n_points=n_points)
-    plot_sensitivity(sens_df)
-    styled_table(sens_df, {'Prob Casa': '{:.1%}', 'Prob Empate': '{:.1%}', 'Prob Fora': '{:.1%}', 'xG Casa': '{:.2f}', 'xG Fora': '{:.2f}', 'Supremacy': '{:.2f}'})
+tab_sens, tab_whatif, tab_kelly, tab_bt = st.tabs([
+    "📉 Sensibilidade", "🔧 What-If", "💰 Kelly Criterion", "📋 Backtesting"
+])
 
-st.divider()
-st.subheader("🎭 Matriz de Cenários")
-if st.button("🎲 Gerar Cenários", type="primary"):
-    with st.spinner("Calculando..."):
-        scen_df = scenario_matrix(home, away, attack, defense, league_avg, elo_ratings)
-    styled_table(scen_df)
-    plot_scenario_radar(scen_df, home, away)
+with tab_sens:
+    section_header("Análise de Sensibilidade — Δ Elo × Probabilidades", "INTERVALO ±300 pts")
 
-st.divider()
-st.subheader("🌍 What-If: Impacto Global de Elo")
-whatif_team = st.selectbox("Time", teams, index=teams.index(home))
-whatif_shift = st.slider("Δ Elo", -200, 200, 50)
-if st.button("🌍 Calcular Impacto Global", type="primary"):
-    with st.spinner("Recalculando..."):
-        impact_df = what_if_elo_shift(elo_ratings, whatif_team, whatif_shift, teams)
-    st.subheader(f"Impacto de {whatif_shift:+.0f} Elo para {whatif_team}")
-    styled_table(impact_df.head(20), {'Elo Original': '{:.0f}', 'Elo Novo': '{:.0f}', 'Posição Original': '{:.0f}', 'Posição Nova': '{:.0f}', 'Δ Posição': '{:+.0f}'})
-    most_impacted = impact_df.nlargest(10, 'Δ Posição')
-    import plotly.express as px
-    fig = px.bar(most_impacted, x='Seleção', y='Δ Posição', title="Times Mais Impactados", color='Δ Posição', color_continuous_scale='RdYlGn')
-    fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
-    st.plotly_chart(fig, use_container_width=True)
+    elo_shifts = np.arange(-300, 301, 25)
+    sens_rows  = []
+    base_res   = predict_match(home, away, neutral, att, defe, ha, rho, lavg, elo)
 
-st.divider()
-st.subheader("🛡️ Robustez do Modelo ρ")
-info_box("O parâmetro ρ controla a dependência entre gols. Testamos diferentes valores.", type="info")
-rho_values = [-0.15, -0.10, -0.08, -0.05, 0.0, 0.05]
-robust_rows = []
-for rho in rho_values:
-    res = predict_match(home, away, neutral, attack, defense, league_avg, elo_ratings, rho=rho)
-    robust_rows.append({'ρ (rho)': rho, 'Prob Casa': res['p_home'], 'Prob Empate': res['p_draw'], 'Prob Fora': res['p_away'], 'Supremacy': res['goal_supremacy']})
-robust_df = pd.DataFrame(robust_rows)
-styled_table(robust_df, {'Prob Casa': '{:.1%}', 'Prob Empate': '{:.1%}', 'Prob Fora': '{:.1%}', 'Supremacy': '{:.2f}'})
-info_box("ρ negativo indica que empates de baixo placar são mais prováveis do que o Poisson independente preveria. O modelo sem ρ (ρ=0) superestima vitórias.", type="info")
+    for shift in elo_shifts:
+        elo_mod = dict(elo)
+        elo_mod[home] = elo.get(home, 1500) + shift
+        res = predict_match(home, away, neutral, att, defe, ha, rho, lavg, elo_mod)
+        mc_h, mc_d, mc_a = monte_carlo_match(res['lam_h'], res['lam_a'], 10_000, rho)
+        sens_rows.append({
+            'Elo Shift': shift,
+            'P(Casa)': mc_h, 'P(Empate)': mc_d, 'P(Fora)': mc_a,
+            'xG Casa': res['xg_h'], 'xG Fora': res['xg_a'],
+        })
+
+    sens_df = pd.DataFrame(sens_rows)
+    plot_sensitivity(sens_df, home)
+
+    cross = sens_df[sens_df['P(Casa)'] >= 0.5]
+    if not cross.empty:
+        tip = cross.iloc[0]['Elo Shift']
+        narrative_box(
+            "📌 Tipping Point",
+            f"O modelo precisa de um ajuste de <b>Δ Elo = {tip:+.0f}</b> para que {home} "
+            f"seja favorito (P > 50%) contra {away}. "
+            f"Elo atual: {home} = {elo.get(home,1500):.0f} · {away} = {elo.get(away,1500):.0f}. "
+            f"Diferencial atual: {elo.get(home,1500) - elo.get(away,1500):+.0f} pts."
+        )
+
+    st.dataframe(sens_df.style.format({
+        'Elo Shift': '{:+.0f}',
+        'P(Casa)': '{:.1%}', 'P(Empate)': '{:.1%}', 'P(Fora)': '{:.1%}',
+        'xG Casa': '{:.2f}', 'xG Fora': '{:.2f}',
+    }), use_container_width=True, hide_index=True)
+
+with tab_whatif:
+    section_header("Cenários What-If", "AJUSTE MANUAL DE PARÂMETROS")
+
+    c1, c2 = st.columns(2)
+    with c1:
+        elo_h_adj = st.number_input(f"Elo {home}", 1000, 2500, int(elo.get(home, 1500)), 10, key='wi_h')
+        att_h_adj = st.slider(f"Ataque {home}", 0.5, 2.0, float(att.get(home, 1.0)), 0.05, key='wi_att_h')
+        def_h_adj = st.slider(f"Defesa {home}", 0.5, 2.0, float(defe.get(home, 1.0)), 0.05, key='wi_def_h')
+    with c2:
+        elo_a_adj = st.number_input(f"Elo {away}", 1000, 2500, int(elo.get(away, 1500)), 10, key='wi_a')
+        att_a_adj = st.slider(f"Ataque {away}", 0.5, 2.0, float(att.get(away, 1.0)), 0.05, key='wi_att_a')
+        def_a_adj = st.slider(f"Defesa {away}", 0.5, 2.0, float(defe.get(away, 1.0)), 0.05, key='wi_def_a')
+
+    neutral_wi = st.toggle("Campo neutro", value=neutral, key='wi_neutral')
+    rho_wi     = st.slider("Rho (DC)", -0.30, 0.30, float(rho), 0.01, key='wi_rho')
+
+    elo_wi  = dict(elo);  elo_wi[home]  = elo_h_adj; elo_wi[away]  = elo_a_adj
+    att_wi  = dict(att);  att_wi[home]  = att_h_adj; att_wi[away]  = att_a_adj
+    defe_wi = dict(defe); defe_wi[home] = def_h_adj; defe_wi[away] = def_a_adj
+
+    res_wi = predict_match(home, away, neutral_wi, att_wi, defe_wi, ha, rho_wi, lavg, elo_wi)
+    mc_h_wi, mc_d_wi, mc_a_wi = monte_carlo_match(res_wi['lam_h'], res_wi['lam_a'], 20_000, rho_wi)
+
+    st.divider()
+    ticker_bar([
+        (f"P({home})", f"{mc_h_wi:.1%}", f"{mc_h_wi - base_res['p_home']:+.1%}"),
+        ("P(Empate)",  f"{mc_d_wi:.1%}", f"{mc_d_wi - base_res['p_draw']:+.1%}"),
+        (f"P({away})", f"{mc_a_wi:.1%}", f"{mc_a_wi - base_res['p_away']:+.1%}"),
+        (f"xG {home}", f"{res_wi['xg_h']:.2f}", f"{res_wi['xg_h'] - base_res['xg_h']:+.2f}"),
+        (f"xG {away}", f"{res_wi['xg_a']:.2f}", f"{res_wi['xg_a'] - base_res['xg_a']:+.2f}"),
+        ("Supremacy",  f"{res_wi['supremacy']:+.2f}", f"{res_wi['supremacy'] - base_res['supremacy']:+.2f}"),
+    ])
+
+    c3, c4, c5 = st.columns(3)
+    with c3: stat_card(f"P({home})", f"{mc_h_wi:.1%}", f"Base: {base_res['p_home']:.1%}")
+    with c4: stat_card("P(Empate)",  f"{mc_d_wi:.1%}", f"Base: {base_res['p_draw']:.1%}")
+    with c5: stat_card(f"P({away})", f"{mc_a_wi:.1%}", f"Base: {base_res['p_away']:.1%}")
+
+    scores_wi = score_distribution(res_wi['matrix'], 8)
+    score_wi_df = pd.DataFrame(scores_wi, columns=['Placar', 'Prob.'])
+    score_wi_df['Prob.'] = score_wi_df['Prob.'].map('{:.2%}'.format)
+    st.dataframe(score_wi_df, use_container_width=True, hide_index=True)
+
+with tab_kelly:
+    section_header("Kelly Criterion — Dimensionamento de Posição", "GESTÃO DE RISCO")
+
+    base_pred = predict_match(home, away, neutral, att, defe, ha, rho, lavg, elo)
+    mc_h_b, mc_d_b, mc_a_b = monte_carlo_match(base_pred['lam_h'], base_pred['lam_a'], 20_000, rho)
+
+    c1, c2, c3 = st.columns(3)
+    with c1: odds_h = st.number_input(f"Odds {home}", 1.01, 50.0, 2.00, 0.05, key='kl_h')
+    with c2: odds_d = st.number_input("Odds Empate", 1.01, 50.0, 3.20, 0.05, key='kl_d')
+    with c3: odds_a = st.number_input(f"Odds {away}", 1.01, 50.0, 3.50, 0.05, key='kl_a')
+
+    frac_kelly = st.slider("Fração de Kelly", 0.1, 1.0, 0.5, 0.05)
+    bankroll   = st.number_input("Bankroll (R$)", 100.0, 1_000_000.0, 10_000.0, 100.0, key='kl_br')
+
+    def kelly(p, odds, frac=0.5):
+        b = odds - 1
+        k = (b * p - (1 - p)) / b
+        return max(0.0, k * frac)
+
+    kelly_h = kelly(mc_h_b, odds_h, frac_kelly)
+    kelly_d = kelly(mc_d_b, odds_d, frac_kelly)
+    kelly_a = kelly(mc_a_b, odds_a, frac_kelly)
+
+    impl_h = 1 / odds_h
+    impl_d = 1 / odds_d
+    impl_a = 1 / odds_a
+    overround = impl_h + impl_d + impl_a
+
+    st.divider()
+    ticker_bar([
+        (f"P(modelo) {home}", f"{mc_h_b:.1%}", f"impl: {impl_h:.1%}"),
+        ("P(modelo) Empate",   f"{mc_d_b:.1%}", f"impl: {impl_d:.1%}"),
+        (f"P(modelo) {away}",  f"{mc_a_b:.1%}", f"impl: {impl_a:.1%}"),
+        ("Overround",          f"{overround:.3f}", "1.00 = justo"),
+    ])
+
+    cols_k = st.columns(3)
+    results_k = [
+        (home,    mc_h_b, impl_h, kelly_h, odds_h),
+        ("Empate", mc_d_b, impl_d, kelly_d, odds_d),
+        (away,    mc_a_b, impl_a, kelly_a, odds_a),
+    ]
+    for col, (label, p_mod, p_imp, k, odds) in zip(cols_k, results_k):
+        edge  = p_mod - p_imp
+        valor = bankroll * k
+        color = GOLD if edge > 0.03 else (MUTED if abs(edge) <= 0.03 else RED)
+        col.markdown(
+            f"<div style='background:{CARD};border:1px solid {BORDER};"
+            f"border-top:2px solid {color};border-radius:4px;padding:14px'>"
+            f"<div style='color:{MUTED};font-size:0.68rem;text-transform:uppercase;"
+            f"letter-spacing:.1em;margin-bottom:6px'>{label}</div>"
+            f"<div style='font-family:JetBrains Mono,monospace;font-size:0.82rem;color:{TEXT}'>"
+            f"P(modelo): <b style='color:{GOLD}'>{p_mod:.1%}</b><br>"
+            f"P(implícita): {p_imp:.1%}<br>"
+            f"Edge: <b style='color:{GREEN if edge>0 else RED}'>{edge:+.1%}</b><br>"
+            f"Kelly fraction: {k:.3f}<br>"
+            f"Aposta sugerida: <b style='color:{color}'>R$ {valor:,.0f}</b>"
+            f"</div></div>",
+            unsafe_allow_html=True
+        )
+
+    narrative_box(
+        "📌 Aviso Metodológico",
+        "Kelly Criterion assume conhecimento preciso das probabilidades verdadeiras. "
+        "A fração parcial (0.25–0.5×Kelly) reduz a variância. "
+        "Edge negativo indica ausência de valor esperado positivo. "
+        "<b>Este módulo é estritamente educacional e quantitativo.</b>"
+    )
+
+with tab_bt:
+    section_header("Backtesting de Calibração do Motor Elo", "BRIER SCORE GLOBAL")
+
+    n_bt = st.slider("Número de partidas para backtest", 100, 5000, 1000, 100, key='bt_n')
+
+    if st.button("▶ Executar Backtesting", type="primary", use_container_width=True):
+        with st.spinner("Calculando Brier Score histórico..."):
+            recent = hist.sort_values('date').tail(n_bt * 2)
+            recent = recent[recent['venue'] == 'home'].tail(n_bt)
+
+            if len(recent) < 50:
+                st.error("Dados insuficientes.")
+            else:
+                brier_vals = ((recent['expected'] - recent['result']) ** 2).values
+                bs_global  = float(brier_vals.mean())
+                bs_baseline = 0.25
+                skill = 1 - bs_global / bs_baseline
+
+                ticker_bar([
+                    ("Brier Score (modelo)",   f"{bs_global:.4f}", "↓ melhor"),
+                    ("Brier Score (baseline)", f"{bs_baseline:.4f}", "naive 50/50"),
+                    ("Skill Score",            f"{skill:.3f}", "↑ melhor"),
+                    ("N partidas",             str(len(recent)), ""),
+                ])
+
+                c1, c2, c3 = st.columns(3)
+                with c1: stat_card("Brier Score", f"{bs_global:.4f}",
+                                   "vs. baseline 0.2500",
+                                   accent=GREEN if bs_global < 0.20 else GOLD)
+                with c2: stat_card("Brier Skill Score", f"{skill:.3f}",
+                                   "1.0 = perfeito · 0 = baseline",
+                                   accent=GREEN if skill > 0.1 else MUTED)
+                with c3: stat_card("Partidas", str(len(recent)), f"últimas {n_bt} com campo")
+
+                recent2 = recent.copy()
+                recent2['p_bin'] = pd.cut(recent2['expected'], bins=10)
+                calib = recent2.groupby('p_bin', observed=True).agg(
+                    mean_pred=('expected','mean'),
+                    mean_actual=('result','mean'),
+                    n=('result','count')
+                ).reset_index()
+
+                fig = go.Figure()
+                fig.add_trace(go.Scatter(x=[0,1], y=[0,1], mode='lines',
+                                          name='Calibração Perfeita',
+                                          line=dict(color=MUTED, width=1, dash='dot')))
+                fig.add_trace(go.Scatter(
+                    x=calib['mean_pred'], y=calib['mean_actual'],
+                    mode='lines+markers', name='Modelo Elo',
+                    line=dict(color=GOLD, width=2),
+                    marker=dict(size=calib['n'] / calib['n'].max() * 14 + 4, color=GOLD),
+                    text=calib['n'].map('N={}'.format), hoverinfo='x+y+text',
+                ))
+                fig.update_layout(
+                    paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
+                    font=dict(color=TEXT, size=10),
+                    xaxis=dict(title='Probabilidade Prevista', gridcolor=BORDER,
+                               range=[0,1], tickformat='.0%'),
+                    yaxis=dict(title='Frequência Real', gridcolor=BORDER,
+                               range=[0,1], tickformat='.0%'),
+                    title=dict(text='Curva de Calibração do Motor Elo',
+                               font=dict(size=12, color=MUTED)),
+                    margin=dict(t=40, b=40, l=50, r=18),
+                    legend=dict(font=dict(size=9), bgcolor='rgba(0,0,0,0)'),
+                )
+                st.plotly_chart(fig, use_container_width=True)
+
+                narrative_box(
+                    "📌 Interpretação",
+                    f"Brier Score de <b>{bs_global:.4f}</b> vs. baseline 0.2500 → "
+                    f"Skill Score de <b>{skill:.3f}</b>. "
+                    f"A curva compara probabilidade prevista vs. frequência empírica de vitórias. "
+                    f"Pontos acima da diagonal: subestimação. Abaixo: superestimação."
+                )
