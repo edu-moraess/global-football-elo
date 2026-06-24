@@ -1,56 +1,105 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-from core.data_loader import load_data, get_processed_data, get_global_metrics, LOOKBACK_YEARS
-from core.metrics_engine import get_confederation, elo_volatility, elo_momentum, elo_efficiency, schedule_strength, team_consistency
-from components.sidebar import render_sidebar
-from components.tables import ranking_table
-from components.charts import plot_scatter_conf, plot_bar_momentum
-from components.cards import narrative_card, info_box
 
-st.set_page_config(page_title="Inteligência Elo", layout="wide")
+st.set_page_config(page_title="Inteligência Elo", layout="wide", page_icon="🧠")
 
-df = load_data()
-elo_ratings, elo_history, attack, defense, league_avg = get_processed_data(df, LOOKBACK_YEARS)
-teams = sorted(list(elo_ratings.keys()))
+from components import inject_css, render_sidebar, ticker_bar, stat_card, section_header, narrative_box
+from components import plot_conf_scatter, plot_momentum_bar
+from components.theme import GOLD, RED, GREEN, MUTED, BLUE
+from core.data_loader import load_all, LOOKBACK_YEARS
+from core.elo_engine import CONFEDERATIONS
+
+inject_css()
+
+df, elo, hist, att, defe, ha, rho, lavg, mdf = load_all(LOOKBACK_YEARS)
+teams = sorted(elo.keys())
 state = render_sidebar(teams)
 lookback = state['lookback']
 if lookback != LOOKBACK_YEARS:
-    elo_ratings, elo_history, attack, defense, league_avg = get_processed_data(df, lookback)
+    from core.data_loader import load_all
+    df, elo, hist, att, defe, ha, rho, lavg, mdf = load_all(lookback)
 
-metrics_df = get_global_metrics(elo_ratings, elo_history, teams)
-rank_df = metrics_df.sort_values('Elo', ascending=False).reset_index(drop=True)
-rank_df.index += 1
+mdf = mdf.reset_index(drop=True)
+mdf.index += 1
 
-st.title("🧠 Inteligência Elo Global")
-st.markdown("O ranking Elo não é uma opinião. É uma memória. Cada jogo deixa uma marca.")
+st.markdown(f"<h1>🧠 Inteligência Elo Global</h1>", unsafe_allow_html=True)
+st.caption("Motor: Elo K-dinâmico · pesos por torneio · goal-diff multiplier não-linear")
 
-col1, col2 = st.columns([3, 1])
-with col1:
-    st.subheader("🏆 Ranking Quant Completo")
-    info_box("Elo = força bruta. Momentum = tendência de curto prazo. Volatilidade = imprevisibilidade.", type="info")
-    display_df = rank_df[['Seleção', 'Elo', 'Confederação', 'Momentum', 'Volatilidade', 'Edge Eficiência', 'Forma (5j)']].head(50)
-    ranking_table(display_df)
+top5 = mdf.head(5)
+ticker_items = []
+for _, row in top5.iterrows():
+    mom = row['Momentum']
+    delta = f"+{mom:.0f}" if pd.notna(mom) and mom > 0 else f"{mom:.0f}" if pd.notna(mom) else "—"
+    ticker_items.append((row['Seleção'], f"{row['Elo']:.0f}", delta))
+ticker_bar(ticker_items)
 
-with col2:
-    st.subheader("📜 Narrativa Tática")
-    for t in [state['home_team'], state['away_team']]:
-        vol = elo_volatility(elo_history, t, window=10)
-        mom = elo_momentum(elo_history, t)
-        eff_real, eff_edge = elo_efficiency(elo_history, t, n_last=20)
-        sched = schedule_strength(elo_history, t, n_last=10)
-        consist = team_consistency(elo_history, t, n_last=20)
-        conf = get_confederation(t)
-        rank_pos = rank_df[rank_df['Seleção']==t].index[0] if t in rank_df['Seleção'].values else '?'
-        status = "ascensão" if mom and mom > 15 else "declínio" if mom and mom < -15 else "estabilidade"
-        narrative_card(f"{t} — #{rank_pos} Mundial", f"Momento de <b>{status}</b> ({mom:+.1f} pts). Volatilidade: {vol:.1f}. Eficiência: {eff_real:.2f} pts/jogo.", f"Elo: {elo_ratings[t]:.0f} | Conf: {conf} | Agenda: {sched:.0f if sched is not np.nan else 'N/A'}")
-        st.divider()
+col_rank, col_team = st.columns([3, 1])
 
-st.subheader("🌍 Distribuição de Força por Confederação")
-conf_stats = rank_df.groupby('Confederação').agg({'Elo': ['mean', 'std', 'max', 'count']}).reset_index()
-conf_stats.columns = ['Confederação', 'Média Elo', 'Desvio', 'Máximo', 'Seleções']
-plot_scatter_conf(conf_stats)
+with col_rank:
+    section_header("Ranking Quantitativo Global", "TODAS AS SELEÇÕES")
+    conf_filter = st.selectbox("Filtrar por Confederação",
+                               ['Todas'] + sorted(CONFEDERATIONS.keys()),
+                               label_visibility='collapsed')
+    view_df = mdf if conf_filter == 'Todas' else mdf[mdf['Confederação'] == conf_filter]
 
-st.subheader("🚀 Top 10 Momentum")
-top_mom = rank_df.dropna(subset=['Momentum']).sort_values('Momentum', ascending=False).head(10)
-plot_bar_momentum(top_mom)
+    display = view_df[['Seleção','Confederação','Elo','Momentum','Volatilidade',
+                        'Edge','Forma','BrierScore','Consistência']].copy()
+    display.columns = ['Seleção','Conf','Elo','Momentum','Volat.','Edge','Forma','Brier','Consist.']
+
+    def _color_elo(val):
+        if pd.isna(val): return ''
+        if val > 0: return f'color:{GREEN}'
+        if val < 0: return f'color:{RED}'
+        return ''
+
+    styled = display.style\
+        .format({'Elo': '{:.0f}', 'Momentum': '{:+.1f}', 'Volat.': '{:.1f}',
+                 'Edge': '{:+.2f}', 'Forma': '{:.2f}', 'Brier': '{:.3f}',
+                 'Consist.': '{:.4f}'}, na_rep='—')\
+        .applymap(_color_elo, subset=['Momentum','Edge'])\
+        .background_gradient(subset=['Elo'], cmap='YlOrBr')
+
+    st.dataframe(styled, use_container_width=True, height=480)
+
+with col_team:
+    section_header("Perfil da Seleção", "ANÁLISE INDIVIDUAL")
+    for team in [state['home_team'], state['away_team']]:
+        row = mdf[mdf['Seleção'] == team]
+        if row.empty:
+            st.warning(f"{team} sem dados.")
+            continue
+        r = row.iloc[0]
+        rank = mdf[mdf['Seleção'] == team].index[0]
+        mom  = r['Momentum']
+        trend = "ascensão" if pd.notna(mom) and mom > 15 \
+                else "declínio" if pd.notna(mom) and mom < -15 else "estabilidade"
+        trend_color = GREEN if trend == "ascensão" else (RED if trend == "declínio" else MUTED)
+        narrative_box(
+            f"{team}  ·  #{rank} Mundial",
+            f"Rating: <b style='color:{GOLD}'>{r['Elo']:.0f}</b> "
+            f"&nbsp;|&nbsp; Conf: {r['Confederação']}<br>"
+            f"Tendência: <b style='color:{trend_color}'>{trend}</b> ({mom:+.1f} pts)<br>"
+            f"Volatilidade: {r['Volatilidade']:.1f} &nbsp;|&nbsp; "
+            f"Forma: {r['Forma']:.2f}<br>"
+            f"Brier Score: {r['BrierScore']:.3f} &nbsp;|&nbsp; Edge: {r['Edge']:+.2f}",
+        )
+        st.markdown("<div style='margin:8px 0'></div>", unsafe_allow_html=True)
+
+st.divider()
+section_header("Distribuição de Força por Confederação", "ANÁLISE MACRO")
+conf_stats = mdf.groupby('Confederação').agg(
+    **{'Média Elo': ('Elo','mean'), 'Desvio': ('Elo','std'),
+       'Máximo': ('Elo','max'), 'Seleções': ('Elo','count')}
+).reset_index()
+plot_conf_scatter(conf_stats)
+
+st.divider()
+section_header("Times em Ascensão / Declínio", "MOMENTUM RECENTE (MA5 – MA15)")
+c1, c2 = st.columns(2)
+with c1:
+    top_rise = mdf.dropna(subset=['Momentum']).sort_values('Momentum', ascending=False).head(12)
+    plot_momentum_bar(top_rise)
+with c2:
+    top_fall = mdf.dropna(subset=['Momentum']).sort_values('Momentum').head(12)
+    plot_momentum_bar(top_fall)
