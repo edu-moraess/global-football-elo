@@ -1,55 +1,203 @@
 import streamlit as st
+import pandas as pd
 import numpy as np
-from scipy.signal import find_peaks
-from core.data_loader import load_data, get_processed_data, LOOKBACK_YEARS
-from core.metrics_engine import get_team_history, golden_window, generation_cycles
-from components.sidebar import render_sidebar
-from components.charts import plot_evolution
-from components.cards import info_box
+import plotly.graph_objects as go
 
-st.set_page_config(page_title="Evolução Temporal", layout="wide")
+st.set_page_config(page_title="Evolução Temporal", layout="wide", page_icon="📈")
 
-df = load_data()
-elo_ratings, elo_history, attack, defense, league_avg = get_processed_data(df, LOOKBACK_YEARS)
-teams = sorted(list(elo_ratings.keys()))
+from components import inject_css, render_sidebar, section_header, narrative_box, ticker_bar, stat_card
+from components.charts import plot_elo_evolution
+from components.theme import GOLD, RED, GREEN, MUTED, BLUE, CARD, BORDER, TEXT
+from core.data_loader import load_all, LOOKBACK_YEARS
+from core.metrics_engine import _team_series
+
+inject_css()
+
+df, elo, hist, att, defe, ha, rho, lavg, mdf = load_all(LOOKBACK_YEARS)
+teams = sorted(elo.keys())
 state = render_sidebar(teams)
+home, away = state['home_team'], state['away_team']
 
-st.title("🧬 Evolução Temporal")
-st.markdown("Cada pico é uma geração dourada. Cada vale é uma transição dolorosa. Aqui vemos história em movimento.")
+st.markdown("<h1>📈 Evolução Temporal</h1>", unsafe_allow_html=True)
+st.caption("Séries históricas de rating, detecção de janelas de pico e ciclos de geração")
 
-for team in [state['home_team'], state['away_team']]:
+tab_h, tab_a, tab_comp = st.tabs([f"🟡 {home}", f"🔵 {away}", "⚖️ Ambos"])
+
+
+def _detect_peak(s, pct=0.95):
+    if len(s) < 10:
+        return None, None, None
+    threshold = s['elo_after'].quantile(pct)
+    above = s[s['elo_after'] >= threshold].copy().reset_index(drop=True)
+    if above.empty:
+        return None, None, None
+    above['grp'] = (above.index.to_series().diff() > 1).cumsum()
+    best = above.groupby('grp').size().idxmax()
+    window = above[above['grp'] == best]
+    return window['date'].min(), window['date'].max(), float(window['elo_after'].max())
+
+
+def _generation_cycles(s, prominence=20):
+    from scipy.signal import find_peaks
+    ratings = s['elo_after'].values
+    if len(ratings) < 20:
+        return []
+    peaks, _ = find_peaks(ratings, distance=8, prominence=prominence)
+    return [(s['date'].iloc[p], ratings[p]) for p in peaks]
+
+
+def _render_temporal(team, color):
+    s = _team_series(hist, team)
+    if s.empty:
+        st.warning(f"Sem histórico para {team}.")
+        return
+
+    peak_start, peak_end, peak_val = _detect_peak(s)
+    cycles = _generation_cycles(s)
+    current_elo    = s['elo_after'].iloc[-1]
+    all_time_max   = s['elo_after'].max()
+    all_time_min   = s['elo_after'].min()
+    distance_from_peak = current_elo - all_time_max
+
+    ticker_bar([
+        ("Elo Atual",        f"{current_elo:.0f}", ""),
+        ("Máximo Histórico", f"{all_time_max:.0f}", f"{distance_from_peak:+.0f}"),
+        ("Mínimo Histórico", f"{all_time_min:.0f}", ""),
+        ("Ciclos Detectados",str(len(cycles)), "picos de geração"),
+        ("Janela de Pico",
+         f"{peak_start.strftime('%Y') if peak_start else '—'} – {peak_end.strftime('%Y') if peak_end else '—'}",
+         f"{peak_val:.0f} Elo" if peak_val else ""),
+    ])
+
+    section_header(f"Série Histórica — {team}", "RATING ELO + BANDAS 1σ")
+    plot_elo_evolution(s, team, color)
+
+    if cycles:
+        section_header("Ciclos de Geração Detectados", "PICOS DE PERFORMANCE")
+        s_plot = s.copy().sort_values('date')
+        s_plot['ma20'] = s_plot['elo_after'].rolling(20, min_periods=1).mean()
+
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(x=s_plot['date'], y=s_plot['ma20'],
+                                  mode='lines', name='MA-20',
+                                  line=dict(color=MUTED, width=1.5)))
+        for i, (peak_date, peak_elo) in enumerate(cycles):
+            fig.add_trace(go.Scatter(
+                x=[peak_date], y=[peak_elo],
+                mode='markers+text',
+                marker=dict(color=color, size=10, symbol='star'),
+                text=[f"G{i+1}"], textposition='top center',
+                textfont=dict(size=8, color=color),
+                name=f"Ciclo {i+1}: {peak_date.strftime('%Y')}",
+                showlegend=True,
+            ))
+        if peak_start and peak_end:
+            fig.add_vrect(x0=peak_start, x1=peak_end,
+                          fillcolor="rgba(200,169,81,0.08)",
+                          layer="below", line_width=0)
+            fig.add_annotation(
+                x=peak_start + (peak_end - peak_start) / 2,
+                y=peak_val or current_elo,
+                text="🏆 Janela de Pico", showarrow=False,
+                font=dict(size=9, color=GOLD), bgcolor='rgba(0,0,0,0)',
+            )
+        fig.update_layout(
+            paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
+            font=dict(color=TEXT, size=10),
+            yaxis=dict(gridcolor=BORDER, title='Rating Elo'),
+            xaxis=dict(gridcolor=BORDER),
+            title=dict(text=f'{team} — Ciclos de Geração', font=dict(size=12, color=MUTED)),
+            margin=dict(t=40, b=30, l=36, r=18),
+            legend=dict(font=dict(size=8), bgcolor='rgba(0,0,0,0)'),
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+        cycle_rows = [{'Ciclo': f'G{i+1}', 'Ano': d.strftime('%Y'),
+                       'Rating de Pico': f'{e:.0f}'} for i, (d, e) in enumerate(cycles)]
+        st.dataframe(pd.DataFrame(cycle_rows), use_container_width=True, hide_index=True)
+
     st.divider()
-    st.subheader(f"📈 {team}")
-    s = get_team_history(elo_history, team, n_last=200)
-    if s.empty or len(s) < 5:
-        st.warning(f"Dados insuficientes para {team}.")
-        continue
-    plot_evolution(s, team)
-    ratings_arr = s['rating'].values
-    peaks, _ = find_peaks(ratings_arr, distance=10, prominence=15)
-    valleys, _ = find_peaks(-ratings_arr, distance=10, prominence=15)
-    cycles = generation_cycles(elo_history, team)
-    if len(peaks) > 0 or len(valleys) > 0:
-        st.caption(f"**Ciclos**: {len(peaks)} picos, {len(valleys)} vales. Duração média: {cycles['duracao_media']:.0f}j. Amplitude: {cycles['amplitude']:.0f} pts.")
-    else:
-        st.caption("Nenhum ciclo claro — evolução linear, sugerindo estabilidade institucional.")
-    gw_start, gw_end = golden_window(elo_history, team, min_window=8, threshold_pct=0.95)
-    if gw_start and gw_end:
-        st.success(f"🏆 **Janela de Ouro**: {gw_start.strftime('%Y-%m-%d')} → {gw_end.strftime('%Y-%m-%d')}")
-    else:
-        st.info("Sem janela de ouro clara no período.")
+    section_header("Resultados por Período", "EVOLUÇÃO POR QUINQUÊNIO")
+    s_copy = s.copy()
+    s_copy['period'] = (s_copy['date'].dt.year // 5) * 5
+    period_stats = s_copy.groupby('period').agg(
+        Jogos=('result','count'),
+        Vitórias=('result', lambda x: (x==1.0).sum()),
+        Empates=('result', lambda x: (x==0.5).sum()),
+        Derrotas=('result', lambda x: (x==0.0).sum()),
+        **{'Elo Médio': ('elo_after','mean'), 'ΔElo Total': ('delta_elo','sum')}
+    ).reset_index()
+    period_stats['Período']   = period_stats['period'].astype(str) + 's'
+    period_stats['Win%']      = (period_stats['Vitórias'] / period_stats['Jogos']).map('{:.1%}'.format)
+    period_stats['Elo Médio'] = period_stats['Elo Médio'].map('{:.0f}'.format)
+    period_stats['ΔElo Total']= period_stats['ΔElo Total'].map('{:+.0f}'.format)
+    show_cols = ['Período','Jogos','Vitórias','Empates','Derrotas','Win%','Elo Médio','ΔElo Total']
+    st.dataframe(period_stats[show_cols], use_container_width=True, hide_index=True)
 
-st.divider()
-st.subheader("🔄 Comparativo Temporal Cruzado")
-s_h = get_team_history(elo_history, state['home_team'], n_last=200)
-s_a = get_team_history(elo_history, state['away_team'], n_last=200)
-if not s_h.empty and not s_a.empty:
-    import plotly.graph_objects as go
-    fig_comp = go.Figure()
-    fig_comp.add_trace(go.Scatter(x=s_h['date'], y=s_h['rating'], mode='lines',
-                                  name=state['home_team'], line=dict(color='#e94560', width=2)))
-    fig_comp.add_trace(go.Scatter(x=s_a['date'], y=s_a['rating'], mode='lines',
-                                  name=state['away_team'], line=dict(color='#0f3460', width=2)))
-    fig_comp.update_layout(title="Elo Cruzado — Evolução Comparada", xaxis_title="Data", yaxis_title="Rating",
-                           hovermode="x unified", paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
-    st.plotly_chart(fig_comp, use_container_width=True)
+    narrative_box(
+        f"📌 Diagnóstico Temporal — {team}",
+        f"Máximo histórico: <b>{all_time_max:.0f}</b> Elo "
+        f"({'atual' if abs(current_elo - all_time_max) < 5 else f'{distance_from_peak:+.0f} do pico'}).<br>"
+        f"{len(cycles)} ciclos de geração detectados.<br>"
+        + (f"Janela de pico: <b>{peak_start.strftime('%Y')}</b> – <b>{peak_end.strftime('%Y')}</b> "
+           f"(rating máximo: {peak_val:.0f})." if peak_start else
+           "Pico histórico fora do top-5% da janela selecionada.")
+    )
+
+
+with tab_h: _render_temporal(home, GOLD)
+with tab_a: _render_temporal(away, BLUE)
+
+with tab_comp:
+    section_header("Comparativo de Séries", "OVERLAY ELO MA-20")
+    s_h = _team_series(hist, home).sort_values('date').copy()
+    s_a = _team_series(hist, away).sort_values('date').copy()
+
+    if s_h.empty or s_a.empty:
+        st.warning("Sem dados suficientes para comparação.")
+    else:
+        s_h['ma20'] = s_h['elo_after'].rolling(20, min_periods=1).mean()
+        s_a['ma20'] = s_a['elo_after'].rolling(20, min_periods=1).mean()
+
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(x=s_h['date'], y=s_h['ma20'],
+                                  name=home, line=dict(color=GOLD, width=2)))
+        fig.add_trace(go.Scatter(x=s_a['date'], y=s_a['ma20'],
+                                  name=away, line=dict(color=BLUE, width=2)))
+        fig.update_layout(
+            paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
+            font=dict(color=TEXT, size=10),
+            yaxis=dict(gridcolor=BORDER, title='Rating Elo (MA-20)'),
+            xaxis=dict(gridcolor=BORDER),
+            title=dict(text=f'{home} vs. {away} — Evolução Comparada do Elo',
+                       font=dict(size=12, color=MUTED)),
+            margin=dict(t=40, b=30, l=36, r=18),
+            legend=dict(font=dict(size=9), bgcolor='rgba(0,0,0,0)'),
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+        merged = pd.merge_asof(
+            s_h[['date','ma20']].rename(columns={'ma20':'elo_h'}),
+            s_a[['date','ma20']].rename(columns={'ma20':'elo_a'}),
+            on='date', direction='nearest'
+        )
+        merged['spread'] = merged['elo_h'] - merged['elo_a']
+
+        fig2 = go.Figure()
+        fig2.add_trace(go.Scatter(
+            x=merged['date'], y=merged['spread'],
+            fill='tozeroy', fillcolor='rgba(200,169,81,0.12)',
+            line=dict(color=GOLD, width=1.5),
+            name=f'Spread ({home} − {away})',
+        ))
+        fig2.add_hline(y=0, line_color=MUTED, line_dash='dot', line_width=1)
+        fig2.update_layout(
+            paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
+            font=dict(color=TEXT, size=10),
+            yaxis=dict(gridcolor=BORDER, title='Diferença de Elo'),
+            xaxis=dict(gridcolor=BORDER),
+            title=dict(text=f'Spread de Rating: {home} − {away}',
+                       font=dict(size=12, color=MUTED)),
+            margin=dict(t=40, b=30, l=36, r=18),
+        )
+        st.plotly_chart(fig2, use_container_width=True)
