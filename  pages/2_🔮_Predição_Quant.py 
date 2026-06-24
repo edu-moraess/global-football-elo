@@ -1,90 +1,120 @@
 import streamlit as st
 import numpy as np
-from core.data_loader import load_data, get_processed_data, LOOKBACK_YEARS
-from core.poisson_engine import predict_match, monte_carlo
+import pandas as pd
+
+st.set_page_config(page_title="Predição Quant", layout="wide", page_icon="🔮")
+
+from components import inject_css, render_sidebar, section_header, narrative_box, ticker_bar
+from components import plot_prob_donut, plot_score_heatmap, plot_radar
+from components.theme import GOLD, RED, GREEN, BLUE, MUTED, TEXT
+from core.data_loader import load_all, LOOKBACK_YEARS
+from core.poisson_engine import predict_match, monte_carlo_match, score_distribution
 from core.metrics_engine import elo_momentum, team_consistency, elo_efficiency
-from components.sidebar import render_sidebar
-from components.cards import metric_cards, info_box
-from components.charts import plot_pie_probs, plot_heatmap_matrix, plot_radar
-from components.tables import top_scores_table
 
-st.set_page_config(page_title="Predição Quant", layout="wide")
+inject_css()
 
-df = load_data()
-elo_ratings, elo_history, attack, defense, league_avg = get_processed_data(df, LOOKBACK_YEARS)
-teams = sorted(list(elo_ratings.keys()))
+df, elo, hist, att, defe, ha, rho, lavg, mdf = load_all(LOOKBACK_YEARS)
+teams = sorted(elo.keys())
 state = render_sidebar(teams)
 lookback = state['lookback']
 if lookback != LOOKBACK_YEARS:
-    elo_ratings, elo_history, attack, defense, league_avg = get_processed_data(df, lookback)
+    df, elo, hist, att, defe, ha, rho, lavg, mdf = load_all(lookback)
+
 home, away, neutral = state['home_team'], state['away_team'], state['neutral']
 
-st.title("🔮 Predição Quant Avançada")
-st.markdown("O modelo não adivinha o futuro. Ele quantifica a incerteza.")
+st.markdown("<h1>🔮 Predição Quant Avançada</h1>", unsafe_allow_html=True)
+st.caption("Motor Dixon-Coles · MLE · Monte Carlo 30k iterações · Ajuste Elo")
 
-res = predict_match(home, away, neutral, attack, defense, league_avg, elo_ratings, rho=-0.08)
-mc_h, mc_d, mc_a = monte_carlo(res['l_home'], res['l_away'], iterations=20000)
+res = predict_match(home, away, neutral, att, defe, ha, rho, lavg, elo)
+mc_h, mc_d, mc_a = monte_carlo_match(res['lam_h'], res['lam_a'], 30_000, rho)
 
-elo_diff = res['elo_home'] - res['elo_away']
-supremacy = res['goal_supremacy']
+ticker_bar([
+    (home, f"{res['elo_h']:.0f}", f"{res['elo_h'] - res['elo_a']:+.0f}"),
+    (away, f"{res['elo_a']:.0f}", f"{res['elo_a'] - res['elo_h']:+.0f}"),
+    ("xG Casa", f"{res['xg_h']:.2f}", ""),
+    ("xG Fora", f"{res['xg_a']:.2f}", ""),
+    ("Supremacy", f"{res['supremacy']:+.2f}", ""),
+    ("Rho (DC)", f"{rho:.3f}", ""),
+])
 
-st.markdown(f"**{home}** ({res['elo_home']:.0f} Elo) vs. **{away}** ({res['elo_away']:.0f} Elo). Diferença: {elo_diff:+.0f}. Supremacy: {supremacy:+.2f}")
-
-metric_cards([
-    {'label': 'Elo Casa', 'value': f"{res['elo_home']:.0f}", 'delta': f"{elo_diff:+.0f}"},
-    {'label': 'Elo Fora', 'value': f"{res['elo_away']:.0f}"},
-    {'label': 'xG Casa', 'value': f"{res['xg_home']:.2f}"},
-    {'label': 'xG Fora', 'value': f"{res['xg_away']:.2f}"},
-    {'label': 'Supremacy', 'value': f"{supremacy:+.2f}"},
-], cols=5)
+cols = st.columns(5)
+metrics = [
+    ("P(Casa)",  f"{mc_h:.1%}", f"Analítico: {res['p_home']:.1%}"),
+    ("P(Empate)",f"{mc_d:.1%}", f"Analítico: {res['p_draw']:.1%}"),
+    ("P(Fora)",  f"{mc_a:.1%}", f"Analítico: {res['p_away']:.1%}"),
+    ("xP Casa",  f"{mc_h*3 + mc_d:.2f}", "pontos esperados"),
+    ("xP Fora",  f"{mc_a*3 + mc_d:.2f}", "pontos esperados"),
+]
+for col, (label, val, delta) in zip(cols, metrics):
+    col.metric(label, val, delta)
 
 st.divider()
+
 c1, c2 = st.columns(2)
 with c1:
-    st.subheader("🎲 Probabilidades (Monte Carlo 20k)")
-    plot_pie_probs([mc_h, mc_d, mc_a], [home, "Empate", away], ['#e94560', '#f0f0f0', '#0f3460'])
-    xp_h = (mc_h * 3) + (mc_d * 1)
-    xp_a = (mc_a * 3) + (mc_d * 1)
-    st.info(f"xP: {home}: {xp_h:.2f} | {away}: {xp_a:.2f}")
+    section_header("Probabilidades — Monte Carlo 30k", "DONUT")
+    plot_prob_donut(mc_h, mc_d, mc_a, home, away)
 with c2:
-    st.subheader("🎯 Matriz de Placares")
-    plot_heatmap_matrix(res['matrix'], home, away)
+    section_header("Matriz de Placares (Dixon-Coles)", "HEATMAP 7×7")
+    plot_score_heatmap(res['matrix'], home, away)
 
 st.divider()
-c3, c4 = st.columns(2)
-with c3:
-    scores = [(f"{i}-{j}", res['matrix'][i, j]) for i in range(8) for j in range(8)]
-    scores.sort(key=lambda x: x[1], reverse=True)
-    st.markdown("**Top 5 Placares Prováveis**")
-    top_scores_table(scores)
-with c4:
-    st.markdown("**Mercados de Gols & BTTS**")
-    m = res['matrix']
-    prob_over_15 = np.sum([m[i, j] for i in range(11) for j in range(11) if i + j > 1.5])
-    prob_over_25 = np.sum([m[i, j] for i in range(11) for j in range(11) if i + j > 2.5])
-    prob_over_35 = np.sum([m[i, j] for i in range(11) for j in range(11) if i + j > 3.5])
-    prob_btts = np.sum([m[i, j] for i in range(1, 11) for j in range(1, 11)])
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Over 1.5", f"{prob_over_15:.1%}")
-    m2.metric("Over 2.5", f"{prob_over_25:.1%}")
-    m3.metric("Over 3.5", f"{prob_over_35:.1%}")
-    m4.metric("BTTS", f"{prob_btts:.1%}")
 
-st.subheader("🛡️ Radar de Força Quant")
+c3, c4 = st.columns([1, 1])
+with c3:
+    section_header("Placares Mais Prováveis", "TOP 10")
+    scores = score_distribution(res['matrix'], top_n=10)
+    score_df = pd.DataFrame(scores, columns=['Placar', 'Probabilidade'])
+    score_df['Probabilidade'] = score_df['Probabilidade'].map('{:.2%}'.format)
+    st.dataframe(score_df, use_container_width=True, hide_index=True)
+
+with c4:
+    section_header("Mercados de Gols", "OVER/UNDER · BTTS")
+    M = res['matrix']
+    n = M.shape[0]
+    markets = {
+        'Over 0.5': sum(M[i,j] for i in range(n) for j in range(n) if i+j > 0),
+        'Over 1.5': sum(M[i,j] for i in range(n) for j in range(n) if i+j > 1),
+        'Over 2.5': sum(M[i,j] for i in range(n) for j in range(n) if i+j > 2),
+        'Over 3.5': sum(M[i,j] for i in range(n) for j in range(n) if i+j > 3),
+        'Over 4.5': sum(M[i,j] for i in range(n) for j in range(n) if i+j > 4),
+        'BTTS (Sim)': sum(M[i,j] for i in range(1,n) for j in range(1,n)),
+        'Gols Par':   sum(M[i,j] for i in range(n) for j in range(n) if (i+j) % 2 == 0),
+        'Gols Ímpar': sum(M[i,j] for i in range(n) for j in range(n) if (i+j) % 2 == 1),
+    }
+    mkt_df = pd.DataFrame(list(markets.items()), columns=['Mercado', 'Probabilidade'])
+    mkt_df['Probabilidade'] = mkt_df['Probabilidade'].map('{:.1%}'.format)
+    st.dataframe(mkt_df, use_container_width=True, hide_index=True)
+
+st.divider()
+section_header("Radar de Força Quantitativa", "COMPARATIVO")
 categories = ['Ataque', 'Defesa', 'Elo', 'Momentum', 'Consistência', 'Eficiência']
 
-def get_radar_stats(team, elo, att, defen, hist):
-    s_att = np.clip(att.get(team, 1.0) * 50, 15, 100)
-    s_def = np.clip((2.5 - defen.get(team, 1.0)) * 40, 15, 100)
-    s_elo = np.clip((elo - 1000) / 12, 0, 100)
-    mom = elo_momentum(hist, team, short_window=5, long_window=15)
-    s_mom = np.clip(50 + (mom if mom is not np.nan else 0), 0, 100)
-    consist = team_consistency(hist, team, n_last=20)
-    s_cons = np.clip(100 - (consist * 1000 if consist is not np.nan else 50), 0, 100)
-    eff_real, eff_edge = elo_efficiency(hist, team, n_last=20)
-    s_eff = np.clip(50 + (-eff_edge * 30 if eff_edge is not np.nan else 0), 0, 100)
+def _radar_vals(team, elo_r, att_d, def_d, hist_df):
+    s_att  = float(np.clip(att_d.get(team, 1.0) * 50, 10, 100))
+    s_def  = float(np.clip((2.5 - def_d.get(team, 1.0)) * 40, 10, 100))
+    s_elo  = float(np.clip((elo_r.get(team, 1500) - 1000) / 12, 0, 100))
+    mom    = elo_momentum(hist_df, team)
+    s_mom  = float(np.clip(50 + (mom if pd.notna(mom) else 0), 0, 100))
+    cons   = team_consistency(hist_df, team)
+    s_cons = float(np.clip(100 - (cons * 1200 if pd.notna(cons) else 50), 0, 100))
+    eff_r, eff_e = elo_efficiency(hist_df, team)
+    s_eff  = float(np.clip(50 + (eff_e * 25 if pd.notna(eff_e) else 0), 0, 100))
     return [s_att, s_def, s_elo, s_mom, s_cons, s_eff]
 
-stats_h = get_radar_stats(home, res['elo_home'], attack, defense, elo_history)
-stats_a = get_radar_stats(away, res['elo_away'], attack, defense, elo_history)
-plot_radar(categories, stats_h, stats_a, home, away)
+vals_h = _radar_vals(home, elo, att, defe, hist)
+vals_a = _radar_vals(away, elo, att, defe, hist)
+plot_radar(categories, vals_h, vals_a, home, away)
+
+st.divider()
+fav   = home if mc_h > mc_a else away
+p_fav = max(mc_h, mc_a)
+narrative_box(
+    "📌 Síntese do Modelo",
+    f"<b>{fav}</b> é favorito com probabilidade de vitória de <b>{p_fav:.1%}</b>. "
+    f"xG esperado: {home} {res['xg_h']:.2f} — {away} {res['xg_a']:.2f}. "
+    f"Supremacy: {res['supremacy']:+.2f}. "
+    f"Probabilidade de BTTS: {markets['BTTS (Sim)']:.1%}. "
+    f"Over 2.5: {markets['Over 2.5']:.1%}. "
+    f"O modelo foi calibrado com rho = {rho:.3f} (correlação Dixon-Coles).",
+)
