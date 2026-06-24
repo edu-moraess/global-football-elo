@@ -1,76 +1,134 @@
 import streamlit as st
+import pandas as pd
 import numpy as np
-import plotly.express as px
-from core.data_loader import load_data, get_processed_data, get_global_metrics, LOOKBACK_YEARS
+
+st.set_page_config(page_title="Métricas Avançadas", layout="wide", page_icon="📊")
+
+from components import inject_css, render_sidebar, section_header, narrative_box, ticker_bar, stat_card
+from components.charts import plot_elo_evolution
+from components.theme import GOLD, RED, GREEN, MUTED, BLUE
+from core.data_loader import load_all, LOOKBACK_YEARS
 from core.metrics_engine import (
-    elo_volatility, elo_momentum, elo_efficiency, schedule_strength,
-    team_consistency, golden_window, regression_speed, xg_efficiency,
-    clutch_performance, generation_cycles, form_index, tactical_profile
+    _team_series, brier_score, clutch_performance, xg_over_expected,
+    schedule_strength, elo_efficiency, form_index,
 )
-from components.sidebar import render_sidebar
-from components.cards import metric_cards, info_box
 
-st.set_page_config(page_title="Métricas Avançadas", layout="wide")
+inject_css()
 
-df = load_data()
-elo_ratings, elo_history, attack, defense, league_avg = get_processed_data(df, LOOKBACK_YEARS)
-teams = sorted(list(elo_ratings.keys()))
+df, elo, hist, att, defe, ha, rho, lavg, mdf = load_all(LOOKBACK_YEARS)
+teams = sorted(elo.keys())
 state = render_sidebar(teams)
-lookback = state['lookback']
-if lookback != LOOKBACK_YEARS:
-    elo_ratings, elo_history, attack, defense, league_avg = get_processed_data(df, lookback)
+home, away = state['home_team'], state['away_team']
 
-st.title("📊 Métricas Avançadas")
-st.markdown("Forma é fumaça, estrutura é fogo. Cada métrica conta uma história diferente.")
+st.markdown("<h1>📊 Métricas Avançadas</h1>", unsafe_allow_html=True)
+st.caption("Brier Score, Clutch Index, xGOE, Força de Agenda — além do Elo bruto")
 
-for team in [state['home_team'], state['away_team']]:
+tab_h, tab_a, tab_comp = st.tabs([f"🟡 {home}", f"🔵 {away}", "⚖️ Comparativo"])
+
+
+def _render_team(team, color):
+    s = _team_series(hist, team)
+    if s.empty:
+        st.warning(f"Sem histórico para {team}.")
+        return
+
+    last_elo    = s['elo_after'].iloc[-1]
+    bs          = brier_score(hist, team)
+    clutch      = clutch_performance(hist, team)
+    xgoe        = xg_over_expected(hist, team)
+    sched       = schedule_strength(hist, team)
+    eff_r, eff_e = elo_efficiency(hist, team)
+    fi          = form_index(hist, team)
+    n_games     = len(s)
+
+    ticker_bar([
+        ("Elo atual",    f"{last_elo:.0f}", ""),
+        ("Brier Score",  f"{bs:.3f}" if pd.notna(bs) else "—", "↓ melhor"),
+        ("Clutch Index", f"{clutch:+.2f}" if pd.notna(clutch) else "—", ""),
+        ("xGOE",         f"{xgoe:+.2f}" if pd.notna(xgoe) else "—", "gols/jogo"),
+        ("Força Agenda", f"{sched:.0f}" if pd.notna(sched) else "—", "Elo médio opp."),
+        ("Eficiência",   f"{eff_r:.2f}" if pd.notna(eff_r) else "—", "pts/jogo"),
+        ("Forma (5j)",   f"{fi:.2f}" if pd.notna(fi) else "—", "ponderada exp."),
+        ("Partidas",     str(n_games), f"últimos {LOOKBACK_YEARS}a"),
+    ])
+
+    c1, c2, c3, c4 = st.columns(4)
+    with c1: stat_card("Brier Score",    f"{bs:.3f}" if pd.notna(bs) else "—",
+                       "Calibração do motor. ↓ = melhor", accent=color)
+    with c2: stat_card("Clutch Index",   f"{clutch:+.2f}" if pd.notna(clutch) else "—",
+                       "Oficial vs. amistosos", accent=color)
+    with c3: stat_card("xGOE",          f"{xgoe:+.2f}" if pd.notna(xgoe) else "—",
+                       "Gols reais − proxy xG", accent=color)
+    with c4: stat_card("Força de Agenda",f"{sched:.0f}" if pd.notna(sched) else "—",
+                       "Elo médio dos adversários", accent=color)
+
     st.divider()
-    st.subheader(f"🔬 {team}")
-    vol = elo_volatility(elo_history, team, window=10)
-    mom = elo_momentum(elo_history, team)
-    eff_real, eff_edge = elo_efficiency(elo_history, team, n_last=20)
-    sched = schedule_strength(elo_history, team, n_last=10)
-    consist = team_consistency(elo_history, team, n_last=20)
-    gw_start, gw_end = golden_window(elo_history, team, min_window=8, threshold_pct=0.95)
-    reg_speed = regression_speed(elo_history, team)
-    xg_eff, avg_g = xg_efficiency(elo_history, team, lookback_years=5)
-    clutch = clutch_performance(elo_history, team, n_last=30)
-    cycles = generation_cycles(elo_history, team)
-    form = form_index(elo_history, team, n_last=5)
-    tactical = tactical_profile(elo_history, team, n_last=20)
-    metric_cards([
-        {'label': 'Volatilidade', 'value': f"{vol:.1f}" if vol is not np.nan else "N/A", 'help': "Quanto maior, mais imprevisível"},
-        {'label': 'Momentum', 'value': f"{mom:+.1f}" if mom is not np.nan else "N/A", 'help': "Diferença média curta vs. longa prazo"},
-        {'label': 'Eficiência', 'value': f"{eff_real:.2f} pts/j" if eff_real is not np.nan else "N/A", 'help': "Pontos reais por jogo"},
-        {'label': 'Consistência (CV)', 'value': f"{consist:.4f}" if consist is not np.nan else "N/A", 'help': "Menor = mais consistente"},
-    ], cols=4)
-    metric_cards([
-        {'label': 'Força Agenda', 'value': f"{sched:.0f}" if sched is not np.nan else "N/A", 'help': "Elo médio dos adversários recentes"},
-        {'label': 'Velocidade Regressão', 'value': f"{reg_speed:.0f} jgs" if reg_speed is not np.nan else "N/A", 'help': "Jogos para regressar à média após pico"},
-        {'label': 'xG Efficiency', 'value': f"{xg_eff:.2f}" if xg_eff is not np.nan else "N/A", 'help': "Gols reais / expectativa ofensiva"},
-        {'label': 'Média Gols', 'value': f"{avg_g:.2f}" if avg_g is not np.nan else "N/A"},
-    ], cols=4)
-    metric_cards([
-        {'label': 'Clutch', 'value': f"{clutch:+.2f}" if clutch is not np.nan else "N/A", 'help': "Performance em oficiais vs amistosos"},
-        {'label': 'Ciclos', 'value': f"{cycles['ciclos']}", 'help': f"Duração média: {cycles['duracao_media']:.0f}j" if cycles['duracao_media'] is not np.nan else "N/A"},
-        {'label': 'Forma (5j)', 'value': f"{form:.2f}" if form is not np.nan else "N/A", 'help': "Índice ponderado dos últimos 5 jogos"},
-        {'label': 'Resiliência', 'value': f"{tactical['resiliencia']:.2f}" if tactical['resiliencia'] is not np.nan else "N/A", 'help': "Pontos vs adversários superiores"},
-    ], cols=4)
-    if gw_start and gw_end:
-        st.success(f"🏆 **Janela de Ouro detectada**: {gw_start.strftime('%Y-%m')} → {gw_end.strftime('%Y-%m')}")
-    else:
-        st.info("Nenhuma janela de ouro clara detectada.")
+    section_header(f"Evolução do Rating — {team}", "SÉRIE TEMPORAL")
+    plot_elo_evolution(s, team, color)
 
-st.divider()
-st.subheader("📈 Comparativo Visual de Métricas")
-metrics_df = get_global_metrics(elo_ratings, elo_history, teams).dropna()
-fig_scatter = px.scatter(
-    metrics_df, x='Elo', y='Momentum', size='Eficiência Real', color='Volatilidade',
-    hover_data=['Seleção', 'Consistência'],
-    title="Mapa Quant: Elo vs. Momentum (tamanho = eficiência)",
-    color_continuous_scale='YlOrRd'
-)
-fig_scatter.add_vline(x=elo_ratings[state['home_team']], line_dash="dash", line_color="#e94560", annotation_text=state['home_team'])
-fig_scatter.add_vline(x=elo_ratings[state['away_team']], line_dash="dash", line_color="#0f3460", annotation_text=state['away_team'])
-fig_scatter.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
-st.plotly_chart(fig_scatter, use_container_width=True)
+    section_header("Últimas 20 Partidas", "HISTÓRICO RECENTE")
+    last20 = s.tail(20)[['date','opponent','venue','goals_for','goals_against',
+                          'result','expected','delta_elo','tournament']].copy()
+    last20['date']     = last20['date'].dt.strftime('%d/%m/%Y')
+    last20['result']   = last20['result'].map({1.0:'W', 0.5:'D', 0.0:'L'})
+    last20['delta_elo']= last20['delta_elo'].map('{:+.1f}'.format)
+    last20['expected'] = last20['expected'].map('{:.2%}'.format)
+    last20.columns = ['Data','Oponente','Campo','GP','GC','Res','xP(vitória)','ΔElo','Torneio']
+    st.dataframe(last20.sort_values('Data', ascending=False),
+                 use_container_width=True, hide_index=True, height=320)
+
+    section_header("Performance por Torneio", "BREAKDOWN")
+    tb = s.groupby('tournament').agg(
+        Jogos=('result','count'),
+        Vitórias=('result', lambda x: (x==1).sum()),
+        Empates=('result', lambda x: (x==0.5).sum()),
+        Derrotas=('result', lambda x: (x==0).sum()),
+        **{'Gols Pró': ('goals_for','mean'),
+           'Gols Con': ('goals_against','mean'),
+           'ΔElo Médio': ('delta_elo','mean')}
+    ).reset_index().sort_values('Jogos', ascending=False)
+    tb['Gols Pró']  = tb['Gols Pró'].map('{:.2f}'.format)
+    tb['Gols Con']  = tb['Gols Con'].map('{:.2f}'.format)
+    tb['ΔElo Médio']= tb['ΔElo Médio'].map('{:+.1f}'.format)
+    st.dataframe(tb, use_container_width=True, hide_index=True)
+
+
+with tab_h: _render_team(home, GOLD)
+with tab_a: _render_team(away, BLUE)
+
+with tab_comp:
+    section_header("Comparativo de Métricas", "LADO A LADO")
+    metrics_rows = []
+    for team in [home, away]:
+        bs      = brier_score(hist, team)
+        clutch  = clutch_performance(hist, team)
+        xgoe    = xg_over_expected(hist, team)
+        sched   = schedule_strength(hist, team)
+        eff_r, eff_e = elo_efficiency(hist, team)
+        fi      = form_index(hist, team)
+        row_m   = mdf[mdf['Seleção'] == team]
+        vol     = row_m['Volatilidade'].iloc[0] if not row_m.empty else np.nan
+        mom     = row_m['Momentum'].iloc[0]     if not row_m.empty else np.nan
+        metrics_rows.append(dict(
+            Seleção=team, Elo=elo.get(team,1500),
+            Momentum=mom, Volatilidade=vol,
+            **{'Brier Score': bs, 'Clutch Index': clutch, 'xGOE': xgoe,
+               'Força Agenda': sched, 'Eficiência pts': eff_r, 'Forma (5j)': fi}
+        ))
+
+    comp_df = pd.DataFrame(metrics_rows).T
+    comp_df.columns = comp_df.iloc[0]
+    comp_df = comp_df.iloc[1:]
+    st.dataframe(comp_df.style.format(
+        lambda x: f"{float(x):.3f}" if isinstance(x, (int,float)) and pd.notna(x) else str(x),
+        na_rep='—'
+    ), use_container_width=True)
+
+    narrative_box(
+        "📌 Glossário de Métricas",
+        "<b>Brier Score</b>: erro quadrático médio das probabilidades previstas vs. resultados reais. ↓ melhor.<br>"
+        "<b>Clutch Index</b>: performance em jogos oficiais menos amistosos. Positivo = mais forte no que importa.<br>"
+        "<b>xGOE</b>: gols marcados reais por jogo menos proxy de xG. Positivo = sobreperformance de finalização.<br>"
+        "<b>Força de Agenda</b>: Elo médio dos adversários nos últimos 10 jogos. Contextualiza o rating.<br>"
+        "<b>Eficiência</b>: pontos reais por jogo. Comparado ao esperado pelo modelo (Edge)."
+    )
