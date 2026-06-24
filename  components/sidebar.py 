@@ -1,47 +1,65 @@
-"""Sidebar compartilhado."""
+"""Sidebar compartilhado v2."""
 import streamlit as st
+from .theme import GOLD, MUTED, CARD, BORDER, TEXT
 
-def render_sidebar(teams, default_home="Brazil", default_away="Argentina"):
-    st.sidebar.markdown("<h2 style='text-align:center;'>⚽ Quant Football</h2>", unsafe_allow_html=True)
-    st.sidebar.caption("Análise Quantitativa de Futebol")
-    st.sidebar.divider()
 
-    if 'home_team' not in st.session_state:
-        st.session_state.home_team = default_home if default_home in teams else teams[0]
-    if 'away_team' not in st.session_state:
-        st.session_state.away_team = default_away if default_away in teams else teams[1]
-    if 'neutral' not in st.session_state:
-        st.session_state.neutral = True
-    if 'lookback' not in st.session_state:
-        st.session_state.lookback = 10
+def render_sidebar(teams: list, default_home: str = "Brazil",
+                   default_away: str = "Argentina") -> dict:
 
-    home_team = st.sidebar.selectbox(
-        "Seleção Principal", teams,
-        index=teams.index(st.session_state.home_team) if st.session_state.home_team in teams else 0,
+    st.sidebar.markdown(
+        f"<div style='padding:12px 0 6px;border-bottom:1px solid {BORDER};margin-bottom:12px'>"
+        f"<div style='color:{GOLD};font-size:0.65rem;text-transform:uppercase;"
+        f"letter-spacing:.14em;font-weight:600'>Global Football</div>"
+        f"<div style='color:{TEXT};font-size:1.0rem;font-weight:700;"
+        f"letter-spacing:-.01em'>Quant Intelligence</div>"
+        f"<div style='color:{MUTED};font-size:0.68rem;margin-top:2px'>"
+        f"Elo · Dixon-Coles · Monte Carlo</div>"
+        f"</div>",
+        unsafe_allow_html=True
+    )
+
+    for key, val in [('home_team', default_home), ('away_team', default_away),
+                     ('neutral', True), ('lookback', 10)]:
+        if key not in st.session_state:
+            st.session_state[key] = val if val not in ['Brazil', 'Argentina'] \
+                or val in teams else teams[0]
+
+    home = st.sidebar.selectbox(
+        "SELEÇÃO PRINCIPAL", teams,
+        index=teams.index(st.session_state.home_team)
+              if st.session_state.home_team in teams else 0,
         key="sb_home"
     )
-    away_team = st.sidebar.selectbox(
-        "Seleção Oponente", teams,
-        index=teams.index(st.session_state.away_team) if st.session_state.away_team in teams else 1,
+    away = st.sidebar.selectbox(
+        "SELEÇÃO OPONENTE", teams,
+        index=teams.index(st.session_state.away_team)
+              if st.session_state.away_team in teams else 1,
         key="sb_away"
     )
 
-    if home_team == away_team:
-        st.sidebar.error("Selecione times diferentes.")
+    if home == away:
+        st.sidebar.error("Selecione seleções diferentes.")
         st.stop()
 
-    st.session_state.home_team = home_team
-    st.session_state.away_team = away_team
+    st.session_state.home_team = home
+    st.session_state.away_team = away
 
-    neutral = st.sidebar.toggle("Campo Neutro", value=st.session_state.neutral, key="sb_neutral")
+    neutral = st.sidebar.toggle("Campo neutro", value=st.session_state.neutral,
+                                 key="sb_neutral")
     st.session_state.neutral = neutral
 
-    lookback = st.sidebar.slider("Janela Temporal (anos)", 1, 20, st.session_state.lookback, key="sb_lookback")
+    lookback = st.sidebar.slider("Janela temporal (anos)", 1, 20,
+                                  st.session_state.lookback, key="sb_lookback")
     st.session_state.lookback = lookback
 
-    return {
-        'home_team': home_team,
-        'away_team': away_team,
-        'neutral': neutral,
-        'lookback': lookback
-    }
+    st.sidebar.markdown(
+        f"<div style='margin-top:16px;padding-top:12px;border-top:1px solid {BORDER};"
+        f"color:{MUTED};font-size:0.65rem;line-height:1.7'>"
+        f"Motor: Elo K-dinâmico + Dixon-Coles MLE<br>"
+        f"Dados: 49k+ partidas internacionais<br>"
+        f"Monte Carlo: 30k iterações"
+        f"</div>",
+        unsafe_allow_html=True
+    )
+
+    return dict(home_team=home, away_team=away, neutral=neutral, lookback=lookback)
