@@ -1,56 +1,148 @@
 import streamlit as st
-from core.data_loader import load_data, get_processed_data, LOOKBACK_YEARS
-from core.metrics_engine import get_confederation, home_advantage_by_confederation
-from core.poisson_engine import predict_match
-from components.sidebar import render_sidebar
-from components.charts import plot_waterfall
-from components.cards import info_box
+import pandas as pd
+import numpy as np
+import plotly.graph_objects as go
 
-st.set_page_config(page_title="Contexto de Campo", layout="wide")
+st.set_page_config(page_title="Contexto de Campo", layout="wide", page_icon="🌍")
 
-df = load_data()
-elo_ratings, elo_history, attack, defense, league_avg = get_processed_data(df, LOOKBACK_YEARS)
-teams = sorted(list(elo_ratings.keys()))
+from components import inject_css, render_sidebar, section_header, narrative_box, ticker_bar, stat_card
+from components.theme import GOLD, RED, GREEN, MUTED, BLUE, CARD, BORDER, TEXT
+from core.data_loader import load_all, LOOKBACK_YEARS
+from core.metrics_engine import home_adv_by_confederation
+from core.elo_engine import CONFEDERATIONS, get_confederation
+
+inject_css()
+
+df, elo, hist, att, defe, ha, rho, lavg, mdf = load_all(LOOKBACK_YEARS)
+teams = sorted(elo.keys())
 state = render_sidebar(teams)
-home, away, neutral = state['home_team'], state['away_team'], state['neutral']
+home, away = state['home_team'], state['away_team']
 
-st.title("🏟️ Contexto de Campo")
-st.markdown("A altitude de La Paz. O calor de Manaus. O gelo de Reykjavík. A vantagem de casa é geografia, fisiologia e psicologia.")
+st.markdown("<h1>🌍 Contexto de Campo</h1>", unsafe_allow_html=True)
+st.caption("Home advantage quantificado por confederação · parâmetro ha do modelo Dixon-Coles calibrado por MLE")
 
-from core.elo_engine import CONFEDERATIONS
-ha_df = home_advantage_by_confederation(df, elo_history, CONFEDERATIONS)
-if not ha_df.empty:
-    st.subheader("🌍 Home Advantage por Confederação")
-    import plotly.express as px
-    fig_ha = px.bar(ha_df.sort_values('Advantage Index', ascending=True),
-                    x='Advantage Index', y='Confederação', orientation='h',
-                    color='Advantage Index', color_continuous_scale='RdYlGn',
-                    text='Advantage Index',
-                    labels={'Advantage Index': 'Índice de Vantagem'})
-    fig_ha.update_traces(texttemplate='%{text:.2%}', textposition='outside')
-    fig_ha.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
-    st.plotly_chart(fig_ha, use_container_width=True)
+ticker_bar([
+    ("Home Adv. (MLE)", f"{ha:.4f}", "fator multiplicativo Dixon-Coles"),
+    ("λh / λa (neutro)", f"{lavg[0]:.2f} / {lavg[1]:.2f}", "gols médios liga"),
+    ("Rho (DC)", f"{rho:.3f}", "correlação baixos placares"),
+    (f"Conf. {home}", get_confederation(home), ""),
+    (f"Conf. {away}", get_confederation(away), ""),
+])
 
 st.divider()
-st.subheader("⚖️ Análise Contextual do Confronto")
-conf_h = get_confederation(home)
-conf_a = get_confederation(away)
-ctx = f"""**{home}** ({conf_h}) vs. **{away}** ({conf_a}).
-{"Campo neutro — vantagem de casa neutralizada." if neutral else f"Jogo em casa para **{home}**. Na **{conf_h}**, a vantagem de casa é {'significativa' if conf_h in ['CONMEBOL', 'CAF'] else 'moderada'}."}
-{"Confronto inter-confederação — adaptação tática e fuso horário podem ser fatores." if conf_h != conf_a else "Confronto intra-confederação — familiaridade tática elevada."}
-"""
-st.markdown(ctx)
+ha_df = home_adv_by_confederation(df, CONFEDERATIONS)
+section_header("Home Advantage por Confederação", "ÍNDICE EMPÍRICO")
 
-if not neutral:
-    st.subheader("📉 Impacto da Neutralidade")
-    res_neutral = predict_match(home, away, True, attack, defense, league_avg, elo_ratings, rho=-0.08)
-    res_home = predict_match(home, away, False, attack, defense, league_avg, elo_ratings, rho=-0.08)
-    delta_h = res_home['p_home'] - res_neutral['p_home']
-    delta_d = res_home['p_draw'] - res_neutral['p_draw']
-    delta_a = res_home['p_away'] - res_neutral['p_away']
-    d1, d2, d3 = st.columns(3)
-    d1.metric(f"Δ Prob {home}", f"{delta_h:+.1%}")
-    d2.metric("Δ Prob Empate", f"{delta_d:+.1%}")
-    d3.metric(f"Δ Prob {away}", f"{delta_a:+.1%}")
-    plot_waterfall([home, "Empate", away], [delta_h * 100, delta_d * 100, delta_a * 100],
-                   title="Impacto da Vantagem de Campo (pp)")
+c1, c2 = st.columns([2, 1])
+with c1:
+    colors = [GOLD if v > 0.08 else (BLUE if v > 0.04 else MUTED)
+              for v in ha_df['Home Advantage Index']]
+    fig = go.Figure(go.Bar(
+        x=ha_df['Confederação'], y=ha_df['Home Advantage Index'],
+        marker_color=colors,
+        text=ha_df['Home Advantage Index'].map('{:.3f}'.format),
+        textposition='outside', textfont=dict(size=9),
+    ))
+    fig.update_layout(
+        paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
+        font=dict(color=TEXT, size=10),
+        yaxis=dict(gridcolor=BORDER, zeroline=True, zerolinecolor=MUTED),
+        xaxis=dict(gridcolor='rgba(0,0,0,0)'),
+        title=dict(text='Home Win% − Away Win% por Confederação',
+                   font=dict(size=12, color=MUTED)),
+        margin=dict(t=40, b=30, l=36, r=18),
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+with c2:
+    section_header("Tabela Detalhada", "")
+    disp = ha_df.copy()
+    for col in ['Home Win%', 'Draw%', 'Away Win%']:
+        disp[col] = disp[col].map('{:.1%}'.format)
+    disp['Avg GD'] = disp['Avg GD'].map('{:+.3f}'.format)
+    disp['Home Advantage Index'] = disp['Home Advantage Index'].map('{:.3f}'.format)
+    st.dataframe(disp, use_container_width=True, hide_index=True)
+
+st.divider()
+section_header("Resultados: Campo Neutro vs. Casa", "COMPARATIVO HISTÓRICO")
+
+neutral_df = df[df['neutral'] == True]
+home_df    = df[df['neutral'] == False]
+
+def _win_rates(d):
+    hw = (d['home_score'] > d['away_score']).mean()
+    dr = (d['home_score'] == d['away_score']).mean()
+    aw = (d['home_score'] < d['away_score']).mean()
+    return hw, dr, aw
+
+hw_n, dr_n, aw_n = _win_rates(neutral_df)
+hw_h, dr_h, aw_h = _win_rates(home_df)
+
+c3, c4, c5, c6 = st.columns(4)
+with c3: stat_card("Home Win% (Casa)",   f"{hw_h:.1%}", f"{len(home_df):,} jogos")
+with c4: stat_card("Home Win% (Neutro)", f"{hw_n:.1%}", f"{len(neutral_df):,} jogos")
+with c5: stat_card("Δ Home Win%",        f"{hw_h - hw_n:+.1%}", "vantagem de campo")
+with c6: stat_card("Ha (MLE)",           f"{ha:.4f}", "calibrado no motor DC")
+
+st.divider()
+section_header("Distribuição de Gols por Contexto", "EMPÍRICO")
+
+c7, c8 = st.columns(2)
+with c7:
+    fig2 = go.Figure()
+    fig2.add_trace(go.Bar(name='Casa (como mandante)',
+                          x=['Gols Mandante', 'Gols Visitante'],
+                          y=[home_df['home_score'].mean(), home_df['away_score'].mean()],
+                          marker_color=GOLD))
+    fig2.add_trace(go.Bar(name='Campo Neutro',
+                          x=['Gols Mandante', 'Gols Visitante'],
+                          y=[neutral_df['home_score'].mean(), neutral_df['away_score'].mean()],
+                          marker_color=BLUE))
+    fig2.update_layout(
+        barmode='group',
+        paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
+        font=dict(color=TEXT, size=10),
+        yaxis=dict(gridcolor=BORDER),
+        title=dict(text='Média de Gols: Casa vs. Neutro', font=dict(size=12, color=MUTED)),
+        margin=dict(t=40, b=30, l=36, r=18),
+        legend=dict(font=dict(size=9), bgcolor='rgba(0,0,0,0)'),
+    )
+    st.plotly_chart(fig2, use_container_width=True)
+
+with c8:
+    df_copy = df.copy()
+    df_copy['decade'] = (df_copy['date'].dt.year // 10) * 10
+    dec_stats = []
+    for dec, grp in df_copy[df_copy['neutral'] == False].groupby('decade'):
+        hw, dr, aw = _win_rates(grp)
+        dec_stats.append({'Década': dec, 'Home Win%': hw, 'Away Win%': aw})
+    dec_df = pd.DataFrame(dec_stats)
+
+    fig3 = go.Figure()
+    fig3.add_trace(go.Scatter(x=dec_df['Década'], y=dec_df['Home Win%'],
+                              name='Home Win%', line=dict(color=GOLD, width=2),
+                              mode='lines+markers'))
+    fig3.add_trace(go.Scatter(x=dec_df['Década'], y=dec_df['Away Win%'],
+                              name='Away Win%', line=dict(color=BLUE, width=2),
+                              mode='lines+markers'))
+    fig3.update_layout(
+        paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
+        font=dict(color=TEXT, size=10),
+        yaxis=dict(gridcolor=BORDER, tickformat='.0%'),
+        xaxis=dict(gridcolor=BORDER),
+        title=dict(text='Evolução Histórica do Home Advantage por Década',
+                   font=dict(size=12, color=MUTED)),
+        margin=dict(t=40, b=30, l=36, r=18),
+        legend=dict(font=dict(size=9), bgcolor='rgba(0,0,0,0)'),
+    )
+    st.plotly_chart(fig3, use_container_width=True)
+
+narrative_box(
+    "📌 Interpretação do Home Advantage",
+    f"O motor Dixon-Coles calibrou um fator multiplicativo de home advantage de <b>ha = {ha:.4f}</b> "
+    f"via MLE sobre os últimos {LOOKBACK_YEARS} anos de dados. "
+    f"Empiricamente, mandantes vencem <b>{hw_h:.1%}</b> dos jogos em casa vs. "
+    f"<b>{hw_n:.1%}</b> em campo neutro — diferença de <b>{hw_h-hw_n:+.1%}</b>. "
+    f"Quando o toggle 'Campo Neutro' está ativo nas outras páginas, o fator ha é removido do modelo, "
+    f"refletindo condições de Copa do Mundo em sede neutra."
+)
