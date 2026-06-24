@@ -1,77 +1,166 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-from core.data_loader import load_data, get_processed_data, LOOKBACK_YEARS
-from core.tournament_engine import simulate_group_stage, simulate_knockout, simulate_full_tournament
-from components.sidebar import render_sidebar
+
+st.set_page_config(page_title="Simulador de Torneios", layout="wide", page_icon="🏆")
+
+from components import inject_css, render_sidebar, section_header, narrative_box, ticker_bar, stat_card
 from components.charts import plot_tournament_probs
-from components.tables import styled_table
-from components.cards import info_box
+from components.theme import GOLD, RED, GREEN, MUTED, BLUE, CARD, BORDER, TEXT
+from core.data_loader import load_all, LOOKBACK_YEARS
+from core.tournament_engine import simulate_group_stage, simulate_knockout, simulate_tournament
 
-st.set_page_config(page_title="Simulador de Torneios", layout="wide")
+inject_css()
 
-df = load_data()
-elo_ratings, elo_history, attack, defense, league_avg = get_processed_data(df, LOOKBACK_YEARS)
-teams = sorted(list(elo_ratings.keys()))
+df, elo, hist, att, defe, ha, rho, lavg, mdf = load_all(LOOKBACK_YEARS)
+teams = sorted(elo.keys())
 state = render_sidebar(teams)
 
-st.title("🏆 Simulador de Torneios")
-st.markdown("O que aconteceria se...? Simulamos milhares de universos paralelos.")
+st.markdown("<h1>🏆 Simulador de Torneios</h1>", unsafe_allow_html=True)
+st.caption("Monte Carlo · Grupos · Mata-matas · Copa do Mundo completa (32 seleções)")
 
-mode = st.radio("Modo", ["Grupo (4 times)", "Mata-Mata (2 times)", "Torneio Completo (32 times)"], horizontal=True)
+tab_ko, tab_grp, tab_wc = st.tabs(["⚔️ Mata-Mata", "📋 Fase de Grupos", "🌍 Copa do Mundo"])
 
-if mode == "Grupo (4 times)":
-    st.subheader("⚙️ Configurar Grupo")
-    col1, col2, col3, col4 = st.columns(4)
-    g1 = col1.selectbox("Time 1", teams, index=teams.index(state['home_team']))
-    g2 = col2.selectbox("Time 2", teams, index=teams.index(state['away_team']))
-    g3 = col3.selectbox("Time 3", teams, index=teams.index("France") if "France" in teams else 0)
-    g4 = col4.selectbox("Time 4", teams, index=teams.index("Germany") if "Germany" in teams else 0)
-    if len(set([g1, g2, g3, g4])) != 4:
-        st.error("Selecione 4 times diferentes.")
+with tab_ko:
+    section_header("Simulador de Confronto Eliminatório", "PRORROGAÇÃO + PÊNALTIS")
+    c1, c2 = st.columns(2)
+    with c1:
+        team_a = st.selectbox("Seleção A", teams,
+                               index=teams.index(state['home_team']) if state['home_team'] in teams else 0,
+                               key='ko_a')
+    with c2:
+        team_b = st.selectbox("Seleção B", teams,
+                               index=teams.index(state['away_team']) if state['away_team'] in teams else 1,
+                               key='ko_b')
+
+    n_sim_ko = st.slider("Iterações Monte Carlo", 5_000, 50_000, 20_000, 5_000, key='ko_sims')
+
+    if team_a == team_b:
+        st.error("Selecione seleções diferentes.")
+        st.stop()
+
+    if st.button("▶ Simular Eliminatória", type="primary", use_container_width=True):
+        with st.spinner("Simulando..."):
+            ko_res = simulate_knockout(team_a, team_b, att, defe, ha, rho, lavg, elo, n_sim_ko)
+
+        ticker_bar([
+            (f"P({team_a} vence)", f"{ko_res['prob_a']:.1%}", ""),
+            (f"P({team_b} vence)", f"{ko_res['prob_b']:.1%}", ""),
+            (f"xG {team_a}", f"{ko_res['avg_gf_a']:.2f}", ""),
+            (f"xG {team_b}", f"{ko_res['avg_gf_b']:.2f}", ""),
+        ])
+
+        c3, c4 = st.columns(2)
+        with c3:
+            col = GOLD if ko_res['prob_a'] > ko_res['prob_b'] else MUTED
+            stat_card(f"P({team_a} avança)", f"{ko_res['prob_a']:.1%}",
+                      f"xG médio: {ko_res['avg_gf_a']:.2f}", accent=col)
+        with c4:
+            col = GOLD if ko_res['prob_b'] > ko_res['prob_a'] else MUTED
+            stat_card(f"P({team_b} avança)", f"{ko_res['prob_b']:.1%}",
+                      f"xG médio: {ko_res['avg_gf_b']:.2f}", accent=col)
+
+        fav   = team_a if ko_res['prob_a'] > ko_res['prob_b'] else team_b
+        p_fav = max(ko_res['prob_a'], ko_res['prob_b'])
+        narrative_box(
+            "📌 Síntese da Eliminatória",
+            f"<b>{fav}</b> é favorito para avançar com probabilidade de <b>{p_fav:.1%}</b>. "
+            f"Simulação inclui prorrogação ({n_sim_ko:,} iterações) e disputa de pênaltis. "
+            f"xG esperado: {team_a} {ko_res['avg_gf_a']:.2f} — {team_b} {ko_res['avg_gf_b']:.2f}."
+        )
+
+with tab_grp:
+    section_header("Simulador de Grupo", "4 SELEÇÕES · RODADAS DUPLAS")
+    cols_g = st.columns(4)
+    grp_teams = []
+    defaults = ['Brazil', 'Argentina', 'France', 'Germany']
+    for i, col in enumerate(cols_g):
+        with col:
+            default = defaults[i] if defaults[i] in teams else teams[i]
+            t = st.selectbox(f"Time {i+1}", teams,
+                              index=teams.index(default) if default in teams else i,
+                              key=f'grp_{i}')
+            grp_teams.append(t)
+
+    n_sim_grp = st.slider("Iterações", 500, 5_000, 2_000, 500, key='grp_sims')
+
+    if len(set(grp_teams)) < 4:
+        st.error("Selecione 4 seleções distintas.")
+    elif st.button("▶ Simular Grupo", type="primary", use_container_width=True):
+        with st.spinner("Simulando grupo..."):
+            grp_df = simulate_group_stage(grp_teams, att, defe, ha, rho, lavg, elo, n_sim_grp)
+
+        st.divider()
+        styled = grp_df.style.format({
+            'Pts': '{:.2f}', 'Gols Pró': '{:.2f}', 'Gols Contra': '{:.2f}',
+            'Vitórias': '{:.2f}', 'Empates': '{:.2f}', 'Derrotas': '{:.2f}',
+            'Saldo': '{:+.2f}', 'P(Classificar)': '{:.1%}',
+        }).background_gradient(subset=['P(Classificar)'], cmap='YlOrBr')
+        st.dataframe(styled, use_container_width=True, hide_index=True)
+
+        classified = grp_df.sort_values('P(Classificar)', ascending=False).head(2)
+        narrative_box(
+            "📌 Prognóstico do Grupo",
+            f"Favoritos: <b>{classified.iloc[0]['Seleção']}</b> "
+            f"({classified.iloc[0]['P(Classificar)']:.1%}) e "
+            f"<b>{classified.iloc[1]['Seleção']}</b> "
+            f"({classified.iloc[1]['P(Classificar)']:.1%}). "
+            f"Simulação de {n_sim_grp:,} rodadas completas — campo neutro."
+        )
+
+with tab_wc:
+    section_header("Copa do Mundo 2026 — Simulação Completa", "32 SELEÇÕES · MONTE CARLO")
+    top32_default = mdf['Seleção'].head(32).tolist() if len(mdf) >= 32 else teams[:32]
+
+    with st.expander("⚙️ Configurar 32 Seleções (grupos de 4)", expanded=False):
+        wc_teams = []
+        group_labels = "ABCDEFGH"
+        cols_wc = st.columns(4)
+        for i in range(32):
+            grp_label = group_labels[i // 4]
+            pos = i % 4 + 1
+            default_team = top32_default[i] if i < len(top32_default) else teams[i]
+            with cols_wc[i % 4]:
+                t = st.selectbox(f"G{grp_label}{pos}", teams,
+                                  index=teams.index(default_team) if default_team in teams else i,
+                                  key=f'wc_{i}')
+                wc_teams.append(t)
     else:
-        n_sim = st.slider("Simulações", 100, 5000, 1000, step=100)
-        if st.button("🚀 Simular Grupo", type="primary"):
-            with st.spinner("Simulando..."):
-                result = simulate_group_stage([g1, g2, g3, g4], attack, defense, league_avg, elo_ratings, n_sim=n_sim)
-            st.subheader("📊 Classificação Média do Grupo")
-            styled_table(result, {'pts': '{:.1f}', 'gf': '{:.1f}', 'ga': '{:.1f}', 'GD': '{:.1f}', 'w': '{:.1f}', 'd': '{:.1f}', 'l': '{:.1f}'})
-            import plotly.express as px
-            fig = px.bar(result, x='Seleção', y='pts', color='pts', title="Pontuação Média Esperada", color_continuous_scale='RdYlGn')
-            fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
-            st.plotly_chart(fig, use_container_width=True)
+        wc_teams = top32_default[:32] if len(top32_default) >= 32 else teams[:32]
 
-elif mode == "Mata-Mata (2 times)":
-    st.subheader("⚔️ Confronto Direto — Mata-Mata")
-    ko_h = st.selectbox("Time A", teams, index=teams.index(state['home_team']))
-    ko_a = st.selectbox("Time B", teams, index=teams.index(state['away_team']))
-    n_sim_ko = st.slider("Simulações", 1000, 50000, 10000, step=1000)
-    if st.button("🚀 Simular Mata-Mata", type="primary"):
-        with st.spinner("Calculando..."):
-            ko_res = simulate_knockout(ko_h, ko_a, attack, defense, league_avg, elo_ratings, n_sim=n_sim_ko)
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric(f"Prob {ko_h}", f"{ko_res['prob_a']:.1%}")
-        c2.metric(f"Prob {ko_a}", f"{ko_res['prob_b']:.1%}")
-        c3.metric(f"xG {ko_h}", f"{ko_res['avg_goals_a']:.2f}")
-        c4.metric(f"xG {ko_a}", f"{ko_res['avg_goals_b']:.2f}")
-        import plotly.graph_objects as go
-        fig = go.Figure(data=[go.Pie(labels=[ko_h, ko_a], values=[ko_res['prob_a'], ko_res['prob_b']], hole=0.5, marker_colors=['#e94560', '#0f3460'])])
-        fig.update_layout(showlegend=False, title="Probabilidade de Vitória", paper_bgcolor='rgba(0,0,0,0)')
-        st.plotly_chart(fig, use_container_width=True)
+    n_sim_wc = st.slider("Iterações Monte Carlo", 500, 5_000, 2_000, 500, key='wc_sims')
 
-else:
-    st.subheader("🌍 Simular Copa do Mundo (32 times)")
-    top32 = sorted(elo_ratings.items(), key=lambda x: x[1], reverse=True)[:32]
-    default_teams = [t[0] for t in top32]
-    selected = st.multiselect("Seleções (32)", teams, default=default_teams)
-    if len(selected) != 32:
-        st.warning(f"Selecione exatamente 32 times. Atual: {len(selected)}")
-    else:
-        n_sim_t = st.slider("Simulações", 100, 5000, 1000, step=100)
-        if st.button("🚀 Simular Torneio Completo", type="primary"):
-            with st.spinner("Simulando torneio completo..."):
-                t_res = simulate_full_tournament(selected, attack, defense, league_avg, elo_ratings, n_sim=n_sim_t)
-            st.subheader("🏆 Probabilidades de Título (Top 16)")
-            plot_tournament_probs(t_res)
-            st.subheader("📋 Tabela Completa")
-            styled_table(t_res.head(32), {'title': '{:.1%}', 'final': '{:.1%}', 'semi': '{:.1%}', 'quarter': '{:.1%}', 'round16': '{:.1%}'})
+    if len(set(wc_teams)) < 32:
+        st.warning("Há seleções repetidas. Ajuste os grupos acima.")
+    elif st.button("▶ Simular Copa do Mundo", type="primary", use_container_width=True):
+        with st.spinner(f"Simulando {n_sim_wc:,} edições da Copa do Mundo..."):
+            try:
+                wc_df = simulate_tournament(wc_teams, att, defe, ha, rho, lavg, elo, n_sim_wc)
+                ticker_bar([
+                    ("Favorito",    wc_df.iloc[0]['Seleção'], f"{wc_df.iloc[0]['P(Título)']:.1%}"),
+                    ("2º Favorito", wc_df.iloc[1]['Seleção'], f"{wc_df.iloc[1]['P(Título)']:.1%}"),
+                    ("3º Favorito", wc_df.iloc[2]['Seleção'], f"{wc_df.iloc[2]['P(Título)']:.1%}"),
+                    ("Iterações",   f"{n_sim_wc:,}", ""),
+                ])
+                st.divider()
+                plot_tournament_probs(wc_df, top_n=16)
+                styled_wc = wc_df.style.format({
+                    'P(Título)': '{:.1%}', 'P(Final)': '{:.1%}',
+                    'P(Semi)':  '{:.1%}', 'P(Quartas)': '{:.1%}',
+                    'P(Oitavas)':'{:.1%}',
+                }).background_gradient(subset=['P(Título)'], cmap='YlOrBr')
+                st.dataframe(styled_wc, use_container_width=True, height=640)
+
+                champ  = wc_df.iloc[0]
+                runner = wc_df.iloc[1]
+                narrative_box(
+                    "📌 Síntese da Simulação",
+                    f"<b>{champ['Seleção']}</b> é o maior favorito ao título com "
+                    f"<b>{champ['P(Título)']:.1%}</b>. "
+                    f"<b>{runner['Seleção']}</b> aparece em segundo com {runner['P(Título)']:.1%}. "
+                    f"Top-4 por P(Final): "
+                    + ", ".join(f"{r['Seleção']} ({r['P(Final)']:.1%})"
+                                for _, r in wc_df.head(4).iterrows()) + "."
+                )
+            except ValueError as e:
+                st.error(f"Erro: {e}")
