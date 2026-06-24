@@ -1,71 +1,104 @@
 import streamlit as st
 import pandas as pd
-from datetime import timedelta
-from core.data_loader import load_data, get_processed_data, LOOKBACK_YEARS
-from core.metrics_engine import h2h_psychological_edge
-from components.sidebar import render_sidebar
-from components.charts import plot_timeline
-from components.cards import info_box
+import numpy as np
 
-st.set_page_config(page_title="Confronto Histórico", layout="wide")
+st.set_page_config(page_title="Confronto Histórico", layout="wide", page_icon="⚔️")
 
-df = load_data()
-elo_ratings, elo_history, attack, defense, league_avg = get_processed_data(df, LOOKBACK_YEARS)
-teams = sorted(list(elo_ratings.keys()))
+from components import inject_css, render_sidebar, section_header, narrative_box, ticker_bar, stat_card
+from components.charts import plot_h2h_timeline
+from components.theme import GOLD, RED, GREEN, MUTED, BLUE
+from core.data_loader import load_all, LOOKBACK_YEARS
+from core.metrics_engine import h2h_stats
+
+inject_css()
+
+df, elo, hist, att, defe, ha, rho, lavg, mdf = load_all(LOOKBACK_YEARS)
+teams = sorted(elo.keys())
 state = render_sidebar(teams)
 home, away = state['home_team'], state['away_team']
 
-st.title("⚔️ Confronto Histórico Profundo")
-st.markdown("O futebol tem memória. Cada ponto no gráfico é um capítulo de uma rivalidade.")
+st.markdown("<h1>⚔️ Confronto Histórico</h1>", unsafe_allow_html=True)
+st.caption("Análise de head-to-head, dominância psicológica e evolução temporal dos confrontos")
 
-h2h_data = h2h_psychological_edge(df, home, away, lookback_years=30)
-if h2h_data['total'] > 0:
-    first_year = h2h_data['first_match'].year if h2h_data['first_match'] else '?'
-    last_year = h2h_data['last_match'].year if h2h_data['last_match'] else '?'
-    st.markdown(f"""
-    Nos últimos 30 anos, **{home}** e **{away}** se enfrentaram **{h2h_data['total']}** vezes.
-    Primeiro confronto: **{first_year}**. Mais recente: **{last_year}**.
-    **{home}** venceu **{h2h_data['wins_a']}** | **{away}** venceu **{h2h_data['wins_b']}** | **{h2h_data['draws']}** empates.
-    Saldo de gols: **{h2h_data['gd_sum']:+d}** para {home}.
-    Edge: **{h2h_data['edge']}** (score: {h2h_data['dominance']:.2f}).
-    """)
-else:
-    st.info("Sem histórico de confrontos diretos nos últimos 30 anos.")
+lookback_h2h = st.slider("Janela de análise (anos)", 5, 50, 30, key='h2h_lb')
+stats = h2h_stats(df, home, away, lookback=lookback_h2h)
 
-cutoff = df['date'].max() - timedelta(days=365 * 30)
-h2h_df = df[((df['home_team'] == home) & (df['away_team'] == away)) |
-            ((df['home_team'] == away) & (df['away_team'] == home))]
-h2h_df = h2h_df[h2h_df['date'] >= cutoff].sort_values('date')
+if stats['total'] == 0:
+    st.warning(f"Nenhum confronto registrado entre {home} e {away} nos últimos {lookback_h2h} anos.")
+    st.stop()
+
+ticker_bar([
+    ("Total jogos",      str(stats['total']), ""),
+    (f"Vitórias {home}", str(stats['wins_a']), f"{stats['wins_a']/stats['total']:.0%}"),
+    ("Empates",          str(stats['draws']),  f"{stats['draws']/stats['total']:.0%}"),
+    (f"Vitórias {away}", str(stats['wins_b']), f"{stats['wins_b']/stats['total']:.0%}"),
+    ("Saldo Gols",       f"{stats['gd_sum']:+d}", ""),
+    ("Streak (casa)",    str(stats['streak']), "vitórias consecutivas"),
+])
+
+c1, c2, c3, c4 = st.columns(4)
+with c1: stat_card(f"Vitórias {home}", str(stats['wins_a']), f"{stats['wins_a']/stats['total']:.1%}")
+with c2: stat_card("Empates",          str(stats['draws']),  f"{stats['draws']/stats['total']:.1%}")
+with c3: stat_card(f"Vitórias {away}", str(stats['wins_b']), f"{stats['wins_b']/stats['total']:.1%}")
+with c4:
+    dom = stats['dominance']
+    col = GOLD if dom > 0.12 else (RED if dom < -0.12 else MUTED)
+    stat_card("Índice de Dominância", f"{dom:+.2f}", stats['edge'], accent=col)
+
+st.divider()
+narrative_box(
+    "📌 Diagnóstico Psicológico",
+    f"Em {stats['total']} confrontos desde {stats['first'].year if stats['first'] else '—'}, "
+    f"<b>{stats['edge']}</b>. "
+    f"Saldo de gols acumulado: <b>{stats['gd_sum']:+d}</b>. "
+    f"Maior sequência de vitórias de {home}: <b>{stats['streak']} jogos consecutivos</b>. "
+    f"Último confronto: {stats['last'].strftime('%d/%m/%Y') if stats['last'] else '—'}.",
+)
+
+section_header("Linha do Tempo dos Confrontos", "HISTÓRICO COMPLETO")
+
+mask = (
+    ((df['home_team'] == home) & (df['away_team'] == away)) |
+    ((df['home_team'] == away) & (df['away_team'] == home))
+)
+h2h_df = df[mask].sort_values('date').copy()
+cutoff = df['date'].max() - pd.Timedelta(days=365 * lookback_h2h)
+h2h_df = h2h_df[h2h_df['date'] >= cutoff]
+
+def _gd_a(row):
+    if row['home_team'] == home:
+        return row['home_score'] - row['away_score']
+    return row['away_score'] - row['home_score']
+
+def _score_label(row):
+    if row['home_team'] == home:
+        return f"{home} {row['home_score']}–{row['away_score']} {away}"
+    return f"{home} {row['away_score']}–{row['home_score']} {away}"
+
+h2h_df['gd_a']  = h2h_df.apply(_gd_a, axis=1)
+h2h_df['score'] = h2h_df.apply(_score_label, axis=1)
 
 if not h2h_df.empty:
-    plot_timeline(h2h_df, home, away)
-    st.subheader("📊 Estatísticas do Confronto")
-    h2h_df['gd_for_home'] = h2h_df.apply(
-        lambda r: r['home_score'] - r['away_score'] if r['home_team'] == home else r['away_score'] - r['home_score'], axis=1)
-    avg_gd = h2h_df['gd_for_home'].mean()
-    avg_goals = (h2h_df['home_score'] + h2h_df['away_score']).mean()
-    btts_rate = ((h2h_df['home_score'] > 0) & (h2h_df['away_score'] > 0)).mean()
-    over25 = ((h2h_df['home_score'] + h2h_df['away_score']) > 2.5).mean()
-    k1, k2, k3, k4, k5 = st.columns(5)
-    k1.metric("Média GD", f"{avg_gd:+.2f}")
-    k2.metric("Média Gols", f"{avg_goals:.2f}")
-    k3.metric("BTTS %", f"{btts_rate:.1%}")
-    k4.metric("Over 2.5 %", f"{over25:.1%}")
-    k5.metric("Jogos", len(h2h_df))
-    results_map = []
-    for _, row in h2h_df.iterrows():
-        if row['home_team'] == home:
-            if row['home_score'] > row['away_score']: results_map.append('Vitória Casa')
-            elif row['home_score'] == row['away_score']: results_map.append('Empate')
-            else: results_map.append('Vitória Fora')
-        else:
-            if row['away_score'] > row['home_score']: results_map.append('Vitória Casa')
-            elif row['away_score'] == row['home_score']: results_map.append('Empate')
-            else: results_map.append('Vitória Fora')
-    res_counts = pd.Series(results_map).value_counts().reset_index()
-    res_counts.columns = ['Resultado', 'Contagem']
-    import plotly.express as px
-    fig_res = px.pie(res_counts, values='Contagem', names='Resultado', hole=0.4,
-                     color_discrete_map={'Vitória Casa': '#e94560', 'Empate': '#888888', 'Vitória Fora': '#0f3460'})
-    fig_res.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
-    st.plotly_chart(fig_res, use_container_width=True)
+    plot_h2h_timeline(h2h_df, home, away)
+
+section_header("Confrontos Detalhados", "TABELA")
+display_h2h = h2h_df[['date','home_team','home_score','away_score','away_team','tournament','neutral']]\
+    .sort_values('date', ascending=False).copy()
+display_h2h['date'] = display_h2h['date'].dt.strftime('%d/%m/%Y')
+display_h2h.columns = ['Data','Casa','G.Casa','G.Fora','Fora','Torneio','Neutro']
+st.dataframe(display_h2h, use_container_width=True, hide_index=True, height=320)
+
+st.divider()
+section_header("Desempenho por Torneio", "BREAKDOWN")
+tourn_stats = []
+for tourn, grp in h2h_df.groupby('tournament'):
+    wins   = (grp['gd_a'] > 0).sum()
+    draws  = (grp['gd_a'] == 0).sum()
+    losses = (grp['gd_a'] < 0).sum()
+    tourn_stats.append(dict(
+        Torneio=tourn, Jogos=len(grp),
+        **{f'V {home}': wins, 'E': draws, f'D {home}': losses},
+        Saldo=int(grp['gd_a'].sum()),
+    ))
+tourn_df = pd.DataFrame(tourn_stats).sort_values('Jogos', ascending=False)
+st.dataframe(tourn_df, use_container_width=True, hide_index=True)
